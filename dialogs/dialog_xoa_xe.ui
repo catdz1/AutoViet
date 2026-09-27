@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DialogXoaXe</class>
+ <widget class="QDialog" name="DialogXoaXe">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>420</width><height>260</height></rect>
+  </property>
+  <property name="windowTitle"><string>Xác nhận xoá xe</string></property>
+  <property name="styleSheet">
+   <string notr="true">
+QDialog { background-color: #1a1a2e; color: #ffffff; }
+QLabel { color: #a0a8c0; }
+QPushButton#btnXoa {
+    background-color: #dc2626; color: white; border: none;
+    border-radius: 8px; padding: 10px 28px;
+    font-size: 14px; font-weight: bold; min-width: 130px;
+}
+QPushButton#btnXoa:hover { background-color: #b91c1c; }
+QPushButton#btnHuy {
+    background-color: transparent; color: #a0a8c0;
+    border: 1px solid #2a2a4a; border-radius: 8px;
+    padding: 10px 28px; font-size: 14px; min-width: 130px;
+}
+QPushButton#btnHuy:hover { background-color: #2a2a4a; color: white; }
+   </string>
+  </property>
+
+  <layout class="QVBoxLayout" name="mainLayout">
+   <property name="leftMargin"><number>32</number></property>
+   <property name="topMargin"><number>28</number></property>
+   <property name="rightMargin"><number>32</number></property>
+   <property name="bottomMargin"><number>24</number></property>
+   <property name="spacing"><number>14</number></property>
+
+   <!-- Icon -->
+   <item>
+    <widget class="QLabel" name="lblIcon">
+     <property name="text"><string>🗑️</string></property>
+     <property name="alignment"><set>Qt::AlignCenter</set></property>
+     <property name="styleSheet"><string>font-size:40px;</string></property>
+    </widget>
+   </item>
+
+   <!-- Tiêu đề -->
+   <item>
+    <widget class="QLabel" name="lblTitle">
+     <property name="text"><string>Xác nhận xoá xe</string></property>
+     <property name="alignment"><set>Qt::AlignCenter</set></property>
+     <property name="styleSheet"><string>color:#ffffff; font-size:18px; font-weight:bold;</string></property>
+    </widget>
+   </item>
+
+   <!-- Nội dung cảnh báo -->
+   <item>
+    <widget class="QLabel" name="lblMessage">
+     <property name="text"><string>Bạn có chắc muốn xoá xe này không?
+Hành động này không thể hoàn tác!</string></property>
+     <property name="alignment"><set>Qt::AlignCenter</set></property>
+     <property name="wordWrap"><bool>true</bool></property>
+     <property name="styleSheet"><string>color:#a0a8c0; font-size:13px; line-height:1.6;</string></property>
+    </widget>
+   </item>
+
+   <!-- Divider -->
+   <item>
+    <widget class="QFrame" name="divider">
+     <property name="maximumHeight"><number>1</number></property>
+     <property name="styleSheet"><string>background:#2a2a4a;</string></property>
+    </widget>
+   </item>
+
+   <!-- Buttons -->
+   <item>
+    <layout class="QHBoxLayout" name="btnLayout">
+     <property name="spacing"><number>12</number></property>
+     <item>
+      <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnHuy">
+       <property name="text"><string>Không, giữ lại</string></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnXoa">
+       <property name="text"><string>🗑  Xoá xe</string></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

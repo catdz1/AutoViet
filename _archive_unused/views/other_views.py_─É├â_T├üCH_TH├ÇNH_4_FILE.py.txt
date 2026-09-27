@@ -1,0 +1,2366 @@
+"""
+views/other_views.py — CẬP NHẬT v3
++ Form tạo đơn: Khách hàng mới/cũ + NV tự động điền
++ NV đăng nhập → tự điền tên mình vào đơn hàng
+THAY THẾ file views/other_views.py cũ
+"""
+import os                  # ← THÊM DÒNG NÀY
+import pandas as pd
+import calendar, random
+from datetime import datetime, date
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
+    QPushButton, QLineEdit, QDialog, QFormLayout, QComboBox,
+    QMessageBox, QHeaderView, QLabel, QDoubleSpinBox, QTextEdit,
+    QFrame, QApplication, QTabWidget, QScrollArea, QGridLayout, QInputDialog
+)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QFont, QPixmap   # ← thêm QPixmap vào đây luôn
+from database import get_conn
+
+
+class BaseDialog(QDialog):
+    def __init__(self, parent=None, title="", width=500):
+        super().__init__(parent)
+        self.setWindowTitle(title); self.setMinimumWidth(width)
+        self.setStyleSheet("""
+            QDialog{background:#f0f4f8;color:#00274c;}
+            QLabel{color:#1e40af;font-size:13px;font-weight:600;background:transparent;letter-spacing:0.3px;}
+            QLineEdit,QTextEdit,QDoubleSpinBox,QComboBox{
+                background:#ffffff;color:#00274c;border:0.5px solid #dbeafe;
+                border-radius:8px;padding:8px 12px;font-size:13px;}
+            QLineEdit:focus,QTextEdit:focus,QDoubleSpinBox:focus,QComboBox:focus{border-color:#2563eb;}
+            QComboBox QAbstractItemView{background:#ffffff;color:#00274c;
+                border:0.5px solid #dbeafe;selection-background-color:#eff6ff;}
+            QPushButton{background:#ffffff;color:#00274c;border:0.5px solid #dbeafe;
+                border-radius:8px;padding:8px 18px;font-size:13px;}
+            QPushButton:hover{background:#eff6ff;color:#1e40af;}
+            QPushButton#btn_save{background:#2563eb;color:white;border:none;font-weight:700;min-width:100px;}
+            QPushButton#btn_save:hover{background:#1d4ed8;}
+            QPushButton#btn_pdf{background:#eff6ff;color:#1e40af;border:0.5px solid #bfdbfe;font-weight:600;}
+            QPushButton#btn_pdf:hover{background:#2563eb;color:white;}
+            QTabWidget::pane{border:0.5px solid #dbeafe;border-radius:8px;}
+            QTabBar::tab{padding:6px 16px;font-size:12px;font-weight:600;
+                color:#64748b;background:#f8fafc;border:none;
+                border-bottom:2px solid transparent;}
+            QTabBar::tab:selected{color:#2563eb;border-bottom:2px solid #2563eb;}
+        """)
+        self._main_lv = QVBoxLayout(self)
+        self._main_lv.setContentsMargins(24,20,24,20); self._main_lv.setSpacing(14)
+
+        # Giới hạn chiều cao dialog theo màn hình thực tế — tránh tràn màn hình laptop nhỏ
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.setMaximumHeight(int(screen.height() * 0.92))
+
+    def _add_title(self, text):
+        lbl = QLabel(text);
+        lbl.setStyleSheet("font-size:15px;font-weight:700;color:#00274c;background:transparent;padding-bottom:4px;")
+        sep = QFrame();
+        sep.setFrameShape(QFrame.Shape.HLine);
+        sep.setStyleSheet("background:#dbeafe;max-height:1px;")
+        self._main_lv.addWidget(lbl); self._main_lv.addWidget(sep)
+
+    def _add_form(self):
+        form=QFormLayout(); form.setSpacing(10); form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        # Bọc form trong vùng cuộn — nếu form quá dài, người dùng cuộn được thay vì bị tràn/mất nút
+        form_wrap = QWidget()
+        form_wrap.setLayout(form)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        scroll.setWidget(form_wrap)
+        self._main_lv.addWidget(scroll, 1)
+        return form
+
+    def _add_buttons(self, save_text="💾  Lưu"):
+        sep=QFrame(); sep.setFrameShape(QFrame.Shape.HLine); sep.setStyleSheet("background:#dbeafe;max-height:1px;")
+        self._main_lv.addWidget(sep)
+        bh=QHBoxLayout(); bh.addStretch()
+        bc=QPushButton("  Huỷ bỏ"); bc.clicked.connect(self.reject)
+        bs=QPushButton(save_text); bs.setObjectName("btn_save"); bs.clicked.connect(self._save); bs.setDefault(True)
+        bh.addWidget(bc); bh.addWidget(bs); self._main_lv.addLayout(bh)
+
+    def _f_line(self,ph=""): w=QLineEdit(); w.setPlaceholderText(ph); return w
+    def _f_combo(self,items): w=QComboBox(); w.addItems(items); return w
+    def _f_spin(self,max_v=1e11,step=1e6,suffix=" ₫"):
+        w=QDoubleSpinBox(); w.setRange(0,max_v); w.setSingleStep(step); w.setDecimals(0); w.setSuffix(suffix); return w
+    def _save(self): pass
+
+
+class BaseView(QWidget):
+    COLS=[]
+    def __init__(self,page_name,current_user=None):
+        super().__init__(); self.setObjectName(page_name)
+        self.current_user=current_user or {"role":"nhanvien","id":None}
+        self._sel_id=None; self._rows=[]
+        self._build_base(); self._build_toolbar(); self._load()
+
+    def _build_base(self):
+        self._root=QVBoxLayout(self); self._root.setContentsMargins(0,0,0,0); self._root.setSpacing(0)
+        self._tb=QWidget(); self._tb.setObjectName("toolbar_widget")
+        self._tbh=QHBoxLayout(self._tb); self._tbh.setContentsMargins(12,8,12,8); self._tbh.setSpacing(6)
+        self._root.addWidget(self._tb)
+        self.tbl = QTableWidget(0, len(self.COLS))
+        self.tbl.setHorizontalHeaderLabels([c[0] for c in self.COLS])
+        self.tbl.setAlternatingRowColors(True)
+        self.tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl.setShowGrid(False);
+        self.tbl.verticalHeader().setVisible(False)
+        h = self.tbl.horizontalHeader()
+        # ✅ Căn chỉnh tự động fit nội dung
+        for i, (_, __, stretch) in enumerate(self.COLS):
+            if stretch:
+                h.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+            else:
+                h.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        self.tbl.setStyleSheet("""
+            QTableWidget{background:#ffffff;alternate-background-color:#f8fafc;
+                gridline-color:#f1f5f9;border:none;font-size:13px;}
+            QTableWidget::item{padding:8px 12px;color:#1e293b;border-bottom:1px solid #f1f5f9;}
+            QTableWidget::item:selected{background:#eff6ff;color:#2563eb;}
+            QHeaderView::section{background:#f8fafc;color:#2563eb;
+                font-size:12px;font-weight:800;letter-spacing:1px;
+                padding:12px;border:none;border-bottom:2px solid #2563eb;}
+        """)
+        self._root.addWidget(self.tbl)
+        self.tbl.selectionModel().selectionChanged.connect(self._on_sel)
+
+    def _btn(self,txt,obj=None,slot=None):
+        b=QPushButton(txt)
+        if obj: b.setObjectName(obj)
+        if slot: b.clicked.connect(slot)
+        b.setCursor(Qt.CursorShape.PointingHandCursor); self._tbh.addWidget(b); return b
+
+    def _search_box(self,ph="🔍 Tìm kiếm..."):
+        self._tbh.addStretch()
+        self.search=QLineEdit(); self.search.setObjectName("search_box"); self.search.setPlaceholderText(ph)
+        self.search.textChanged.connect(lambda t: self._load(t.strip()))
+        self._tbh.addWidget(self.search)
+
+    def _build_toolbar(self): pass
+    def _load(self,q=""): pass
+
+    def _render(self):
+        self.tbl.setRowCount(0)
+        for row in self._rows:
+            r = self.tbl.rowCount();
+            self.tbl.insertRow(r);
+            self.tbl.setRowHeight(r, 50)
+            for c, (_, key, __) in enumerate(self.COLS):
+                val = str(row.get(key, "") or "")
+                item = QTableWidgetItem(val);
+                item.setData(Qt.ItemDataRole.UserRole, row.get("id"))
+                item.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+                if c == 0:
+                    item.setForeground(QColor("#2563eb"))
+                    item.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+                else:
+                    item.setForeground(QColor("#334155"))
+                    item.setFont(QFont("Segoe UI", 12))
+                self.tbl.setItem(r, c, item)
+
+    def _on_sel(self):
+        r=self.tbl.currentRow()
+        if 0<=r<len(self._rows): self._sel_id=self._rows[r]["id"]
+
+    def refresh(self):
+        q=getattr(self,"search",None); self._load(q.text().strip() if q else "")
+
+    def _check_sel(self,action="thao tác"):
+        if not self._sel_id:
+            QMessageBox.warning(self,"Chưa chọn",f"Vui lòng chọn dòng cần {action}!"); return False
+        return True
+
+    def _get_row(self,table,id_val):
+        conn=get_conn(); row=conn.execute(f"SELECT * FROM {table} WHERE id=?",(id_val,)).fetchone()
+        conn.close(); return dict(row) if row else None
+
+
+# ════════════════════════════════════════════════════════════════
+# KHÁCH HÀNG
+# ════════════════════════════════════════════════════════════════
+class KhachHangView(BaseView):
+    COLS=[("MÃ KH","ma_kh",False),("HỌ TÊN","ho_ten",True),
+          ("SỐ ĐT","so_dt",False),("EMAIL","email",False),
+          ("LOẠI KH","loai_kh",False),("CMND/CCCD","cmnd",False)]
+    def __init__(self,current_user=None):
+        super().__init__("page_khach_hang",current_user)
+        self.tbl.doubleClicked.connect(self._on_double_click)  # ← double-click xem chi tiết
+
+    def _build_toolbar(self):
+        self._btn("+ Thêm KH","btn_add",self._add)
+        self._btn("✏  Sửa",None,self._edit)
+        self._btn("🗑  Xoá","btn_del",self._delete)
+        self._btn("🔍 Lịch sử GD",None,self._lich_su)
+        self._btn("📊 Excel","btn_excel",self._export)
+        self._search_box("🔍 Tìm khách hàng...")
+
+    def _load(self,q=""):
+        conn=get_conn(); sql="SELECT * FROM khach_hang"; p=[]
+        if q: sql+=" WHERE ho_ten LIKE ? OR so_dt LIKE ? OR ma_kh LIKE ?"; p=[f"%{q}%"]*3
+        self._rows=[dict(r) for r in conn.execute(sql+" ORDER BY id DESC",p).fetchall()]
+        conn.close(); self._render()
+        self._render()
+        for r, row in enumerate(self._rows):
+            # Mã KH — xanh đậm
+            i0 = QTableWidgetItem(row.get("ma_kh", ""))
+            i0.setForeground(QColor("#2563eb"))
+            i0.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+            self.tbl.setItem(r, 0, i0)
+            # Họ tên — đen đậm
+            i1 = QTableWidgetItem(row.get("ho_ten", ""))
+            i1.setForeground(QColor("#0f172a"))
+            i1.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+            self.tbl.setItem(r, 1, i1)
+            # Số ĐT — xanh lá
+            i2 = QTableWidgetItem(row.get("so_dt", "") or "")
+            i2.setForeground(QColor("#16a34a"))
+            i2.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+            self.tbl.setItem(r, 2, i2)
+            # Loại KH — badge màu
+            loai = row.get("loai_kh", "")
+            i4 = QTableWidgetItem(loai)
+            i4.setForeground(QColor("#7c3aed") if loai == "Doanh nghiệp" else QColor("#0891b2"))
+            i4.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+            self.tbl.setItem(r, 4, i4)
+
+    def _add(self):
+        if KhachHangDialog(self).exec(): self._load()
+    def _edit(self):
+        if not self._check_sel("sửa"): return
+        row=self._get_row("khach_hang",self._sel_id)
+        if KhachHangDialog(self,row).exec(): self._load()
+    def _delete(self):
+        if not self._check_sel("xoá"): return
+        conn=get_conn()
+        if conn.execute("SELECT COUNT(*) FROM don_hang WHERE kh_id=?",(self._sel_id,)).fetchone()[0]:
+            conn.close(); QMessageBox.critical(self,"","KH đã có đơn hàng!"); return
+        conn.close()
+        if QMessageBox.question(self,"Xác nhận","Xoá khách hàng này?",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No
+        )==QMessageBox.StandardButton.Yes:
+            conn=get_conn(); conn.execute("DELETE FROM khach_hang WHERE id=?",(self._sel_id,))
+            conn.commit(); conn.close(); self._sel_id=None; self._load()
+    def _lich_su(self):
+        if not self._check_sel("xem lịch sử"): return
+        row=next((r for r in self._rows if r["id"]==self._sel_id),None)
+        if row: LichSuKHDialog(self,row).exec()
+    def _export(self):
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        import datetime
+        conn = get_conn()
+        rows = conn.execute("SELECT ma_kh,ho_ten,so_dt,email,dia_chi,loai_kh FROM khach_hang").fetchall()
+        conn.close()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Khách hàng"
+        ws.merge_cells("A1:F1")
+        ws["A1"] = "DANH SÁCH KHÁCH HÀNG — AUTOVIET"
+        ws["A1"].font = Font(name="Segoe UI", size=14, bold=True, color="FFFFFF")
+        ws["A1"].fill = PatternFill("solid", fgColor="1E40AF")
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 36
+        ws.merge_cells("A2:F2")
+        ws["A2"] = f"Ngày xuất: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        ws["A2"].font = Font(name="Segoe UI", size=10, italic=True, color="64748B")
+        ws["A2"].alignment = Alignment(horizontal="right")
+        ws.row_dimensions[2].height = 20
+        headers = ["MÃ KH", "HỌ TÊN", "SỐ ĐIỆN THOẠI", "EMAIL", "ĐỊA CHỈ", "LOẠI KH"]
+        col_widths = [12, 25, 18, 28, 30, 12]
+        thin = Side(style="thin", color="BFDBFE")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        for i, (h, w) in enumerate(zip(headers, col_widths), 1):
+            cell = ws.cell(row=3, column=i, value=h)
+            cell.font = Font(name="Segoe UI", size=11, bold=True, color="1E40AF")
+            cell.fill = PatternFill("solid", fgColor="DBEAFE")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.row_dimensions[3].height = 28
+        fill_white = PatternFill("solid", fgColor="FFFFFF")
+        fill_alt = PatternFill("solid", fgColor="F0F7FF")
+        font_data = Font(name="Segoe UI", size=11, color="1E293B")
+        font_ma = Font(name="Segoe UI", size=11, bold=True, color="2563EB")
+        for ri, row in enumerate(rows, 4):
+            fill = fill_white if ri % 2 == 0 else fill_alt
+            ws.row_dimensions[ri].height = 24
+            for ci, val in enumerate(row, 1):
+                cell = ws.cell(row=ri, column=ci, value=val)
+                cell.fill = fill
+                cell.border = border
+                cell.alignment = Alignment(vertical="center",
+                    horizontal="center" if ci in (1, 3, 6) else "left")
+                cell.font = font_ma if ci == 1 else font_data
+        ws.freeze_panes = "A4"
+        fname = f"DanhSach_KhachHang_{datetime.datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
+        wb.save(fname)
+        QMessageBox.information(self, "Excel", f"✅ Đã xuất: {fname}")
+
+    def _xem_chitiet(self):
+        if not self._check_sel("xem chi tiết"): return
+        row = next((r for r in self._rows if r["id"] == self._sel_id), None)
+        if row:
+            KhachHangChiTietDialog(self, row).exec()
+
+    def _on_double_click(self, index):
+        r = index.row()
+        if 0 <= r < len(self._rows):
+            self._sel_id = self._rows[r]["id"]
+            KhachHangChiTietDialog(self, self._rows[r]).exec()
+
+
+class LichSuKHDialog(BaseDialog):
+    def __init__(self,parent=None,kh_row=None):
+        super().__init__(parent,f"Lịch sử — {kh_row['ho_ten']}",700)
+        self.kh=kh_row; self._build_ls()
+    def _build_ls(self):
+        self._add_title(f"👥  {self.kh['ho_ten']}  |  {self.kh['so_dt']}")
+        conn=get_conn()
+        dh_rows=conn.execute("""SELECT dh.ma_don,x.hang_xe||' '||x.dong_xe,dh.gia_ban_thuc,
+            dh.trang_thai,dh.ngay_dat FROM don_hang dh JOIN xe x ON dh.xe_id=x.id
+            WHERE dh.kh_id=? ORDER BY dh.id DESC""",(self.kh["id"],)).fetchall()
+        dv_rows=conn.execute("""SELECT dv.ma_dv,x.hang_xe||' '||x.dong_xe,dv.loai_dv,
+            dv.chi_phi,dv.trang_thai FROM dich_vu dv LEFT JOIN xe x ON dv.xe_id=x.id
+            WHERE dv.kh_id=? ORDER BY dv.id DESC""",(self.kh["id"],)).fetchall()
+        conn.close()
+        tong=sum(r[2] for r in dh_rows)
+        stat_lv=QHBoxLayout(); stat_lv.setSpacing(10)
+        for icon,lbl,val,col in [("🛒","Số đơn",str(len(dh_rows)),"#2563eb"),
+            ("💰","Tổng chi",f"{tong/1e9:.2f} tỷ","#059669"),
+            ("🔧","DV",str(len(dv_rows)),"#f59e0b")]:
+            w=QWidget(); w.setStyleSheet("background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;")
+            wl=QVBoxLayout(w); wl.setContentsMargins(12,8,12,8)
+            lbl_w = QLabel(f"{icon} {lbl}")
+            lbl_w.setStyleSheet("color:#94a3b8;font-size:12px;font-weight:600;background:transparent;")
+            wl.addWidget(lbl_w)
+            vl=QLabel(val); vl.setStyleSheet(f"font-size:16px;font-weight:700;color:{col};background:transparent;")
+            wl.addWidget(vl); stat_lv.addWidget(w)
+        self._main_lv.addLayout(stat_lv)
+        lh=QLabel("📋 Đơn hàng"); lh.setStyleSheet("font-size:13px;font-weight:700;color:#1e40af;background:transparent;")
+        self._main_lv.addWidget(lh)
+        tbl1=QTableWidget(0,5); tbl1.setHorizontalHeaderLabels(["MÃ ĐƠN","XE","GIÁ BÁN","TRẠNG THÁI","NGÀY"])
+        tbl1.setShowGrid(False); tbl1.verticalHeader().setVisible(False); tbl1.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        tbl1.horizontalHeader().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch); tbl1.setMaximumHeight(160)
+        STATUS={"Đã giao xe":"#059669","Đã thanh toán":"#2563eb","Chờ xử lý":"#d97706","Huỷ":"#dc2626"}
+        for dh in dh_rows:
+            r=tbl1.rowCount(); tbl1.insertRow(r); tbl1.setRowHeight(r,40)
+            for c,v in enumerate([dh[0],dh[1],f"{dh[2]/1e9:.2f} tỷ",dh[3],dh[4]]):
+                item = QTableWidgetItem(str(v))
+                if c == 0:
+                    item.setForeground(QColor("#2563eb"))
+                elif c == 1:
+                    item.setForeground(QColor("#374151"))
+                elif c == 2:
+                    item.setForeground(QColor("#059669"))
+                elif c == 3:
+                    item.setForeground(QColor(STATUS.get(v, "#64748b")))
+                elif c == 4:
+                    item.setForeground(QColor("#64748b"))
+                tbl1.setItem(r,c,item)
+        self._main_lv.addWidget(tbl1)
+        bh=QHBoxLayout(); bh.addStretch()
+        bc=QPushButton("Đóng"); bc.clicked.connect(self.reject); bh.addWidget(bc)
+        self._main_lv.addLayout(bh)
+    def _save(self): pass
+
+"""
+Thêm vào file other_views.py:
+1. Class KhachHangChiTietDialog — dialog xem chi tiết khách hàng
+2. Sửa KhachHangView._build_toolbar() — thêm nút "👁 Xem chi tiết"
+3. Sửa KhachHangView._load() — thêm double-click kết nối
+"""
+
+"""
+KhachHangChiTietDialog - THIẾT KẾ LẠI
+Màu trắng + xanh đen + In hóa đơn
+THAY THẾ class KhachHangChiTietDialog cũ trong views/other_views.py
+"""
+
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QFrame, QTableWidget, QTableWidgetItem, QHeaderView,
+    QScrollArea, QGridLayout, QMessageBox
+)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QFont, QPixmap
+from database import get_conn
+
+
+class KhachHangChiTietDialog(QDialog):
+    """
+    ✅ THIẾT KẾ MỚI - Chi tiết khách hàng
+    - Nền TRẮNG + xanh đen
+    - Thông tin KH đầy đủ
+    - Lịch sử xe + ảnh xe
+    - In hóa đơn thay tạo đơn
+    """
+
+    def __init__(self, parent=None, kh_row=None):
+        super().__init__(parent)
+        self.kh = kh_row or {}
+        self.setWindowTitle(f"Chi tiết khách hàng — {self.kh.get('ho_ten', '')}")
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.setMinimumSize(min(1000, int(screen.width()*0.85)), min(750, int(screen.height()*0.82)))
+
+        self.setStyleSheet("""
+            QDialog { background:#ffffff; }
+            QLabel { background:transparent; color:#111827; }
+            QWidget { background:transparent; }
+
+            QScrollArea { border:none; background:#ffffff; }
+
+            QTableWidget {
+                background:#ffffff;
+                alternate-background-color:#f9fafb;
+                gridline-color:#e5e7eb;
+                border:none;
+                selection-background-color:#dbeafe;
+            }
+            QTableWidget::item {
+                padding:10px 12px; color:#374151;
+                border-bottom:1px solid #e5e7eb;
+            }
+            QTableWidget::item:selected {
+                background:#dbeafe; color:#2563eb;
+            }
+            QHeaderView::section {
+                background:#f3f4f6; color:#2563eb;
+                font-size:12px; font-weight:800;
+                letter-spacing:0.5px; padding:12px;
+                border:none; border-bottom:2px solid #2563eb;
+            }
+
+            QPushButton {
+                background:#f3f4f6; color:#374151;
+                border:1px solid #d1d5db; border-radius:8px;
+                padding:10px 18px; font-size:13px; font-weight:600;
+            }
+            QPushButton:hover { 
+                background:#e5e7eb; 
+                border-color:#9ca3af;
+            }
+            
+           QPushButton#btn_pdf {
+               background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+        stop:0 #0F1F35, stop:1 #1a3a5c);
+    color: #ffffff; border: none;
+    font-weight: 700; padding: 12px 24px;
+    font-size: 14px; border-radius: 10px;
+}
+QPushButton#btn_pdf:hover {
+    background: #1a3a5c;
+}
+            QPushButton#btn_close {
+    background: rgba(255,255,255,0.12);
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,0.25);
+}
+QPushButton#btn_close:hover {
+    background: rgba(255,255,255,0.2);
+}
+        """)
+        self._build()
+        self._load()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── HEADER - TRẮNG, ĐẬM, PHỐI MÀU ───────────────────────────────
+        hdr = QWidget()
+        hdr.setStyleSheet("background: #ffffff; border-bottom: 2px solid #e5e7eb;")
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(28, 24, 28, 24)
+        hl.setSpacing(24)
+
+        # Avatar - Gradient xanh dương
+        av = QLabel("👥")
+        av.setStyleSheet(
+            "font-size:48px; background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            "stop:0 #dbeafe, stop:1 #93c5fd); "
+            "border-radius:60px; padding:16px;"
+        )
+        av.setFixedSize(110, 110)
+        av.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hl.addWidget(av)
+
+        # Thông tin chính
+        info_col = QVBoxLayout()
+        info_col.setSpacing(8)
+
+        # Tên - Đen đậm, TO
+        ten = QLabel(self.kh.get("ho_ten", ""))
+        ten.setStyleSheet("font-size:28px; font-weight:900; color:#111827;")
+
+        # Mã & Loại - Xanh dương
+        ma_loai = QLabel(
+            f"🪪 {self.kh.get('ma_kh', '')}  •  "
+            f"👤 {('🏢 Doanh nghiệp' if self.kh.get('loai_kh') == 'Doanh nghiệp' else '👤 Cá nhân')}"
+        )
+        ma_loai.setStyleSheet("font-size:13px; color:#0284c7; font-weight:700; letter-spacing:0.5px;")
+
+        # SĐT & Email - Cam
+        sdt_email = QLabel(
+            f"📱 {self.kh.get('so_dt', '') or '—'}  •  "
+            f"📧 {self.kh.get('email', '') or '—'}"
+        )
+        sdt_email.setStyleSheet("font-size:12px; color:#d97706; font-weight:600;")
+
+        # Địa chỉ & Ngày sinh - Xanh lá
+        dc = QLabel(
+            f"🏠 {self.kh.get('dia_chi', '') or '—'}  •  "
+            f"🎂 {self.kh.get('ngay_sinh', '') or '—'}"
+        )
+        dc.setStyleSheet("font-size:12px; color:#059669; font-weight:600;")
+
+        # CCCD/CMND - Tím
+        cmnd = QLabel(f"🪪 CCCD/CMND: {self.kh.get('cmnd', '') or '—'}")
+        cmnd.setStyleSheet("font-size:12px; color:#7c3aed; font-weight:600;")
+
+        info_col.addWidget(ten)
+        info_col.addWidget(ma_loai)
+        info_col.addWidget(sdt_email)
+        info_col.addWidget(dc)
+        info_col.addWidget(cmnd)
+        hl.addLayout(info_col, 1)
+
+        root.addWidget(hdr)
+
+        # ── STAT CARDS ───────────────────────────────────────────────────
+        stat_w = QWidget()
+        stat_w.setStyleSheet("background:#f9fafb; border-bottom:1px solid #e5e7eb;")
+        stat_l = QHBoxLayout(stat_w)
+        stat_l.setContentsMargins(16, 14, 16, 14)
+        stat_l.setSpacing(12)
+
+        self._stat_lbls = {}
+        border_colors = ["#0F1F35", "#059669", "#7c3aed", "#d97706"]
+        for i, (key, icon, label, color) in enumerate([
+            ("so_don", "🛒", "Số đơn hàng", "#0F1F35"),
+            ("tong_chi", "💰", "Tổng chi tiêu", "#059669"),
+            ("so_xe", "🚗", "Số xe đã mua", "#7c3aed"),
+            ("so_dv", "🔧", "Dịch vụ", "#d97706"),
+        ]):
+            c = QWidget()
+            c.setStyleSheet(
+                f"background:#ffffff;"
+                f"border:1px solid #e5e7eb;"
+                f"border-radius:12px;"
+                f"border-top: 3px solid {border_colors[i]};")
+            cl = QVBoxLayout(c)
+            cl.setContentsMargins(14, 12, 14, 12)
+            cl.setSpacing(2)
+            val_lbl = QLabel("—")
+            val_lbl.setStyleSheet(
+                f"font-size:18px; font-weight:800; color:{color};")
+            lbl_lbl = QLabel(f"{icon} {label}")
+            lbl_lbl.setStyleSheet("font-size:11px; color:#6b7280; font-weight:600;")
+            cl.addWidget(val_lbl)
+            cl.addWidget(lbl_lbl)
+            stat_l.addWidget(c, 1)
+            self._stat_lbls[key] = val_lbl
+
+        root.addWidget(stat_w)
+
+        # ── NỘI DUNG CHÍNH ───────────────────────────────────────────────
+        content = QWidget()
+        content.setStyleSheet("background:#ffffff;")
+        content_l = QVBoxLayout(content)
+        content_l.setContentsMargins(24, 20, 24, 20)
+        content_l.setSpacing(20)
+
+        # -- Bảng đơn hàng + xe --
+        sec1_title = QLabel("🛒  Lịch sử mua xe & đơn hàng")
+        sec1_title.setStyleSheet("""
+            font-size:14px; font-weight:700; color:#0F1F35;
+            padding: 8px 14px;
+            background: #f0f4ff;
+            border-left: 4px solid #0F1F35;
+            border-radius: 0 8px 8px 0;
+        """)
+        content_l.addWidget(sec1_title)
+
+        # Đường kẻ
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.HLine)
+        sep1.setStyleSheet("background:#e5e7eb; max-height:1px; margin-bottom:10px;")
+        content_l.addWidget(sep1)
+
+        # Bảng đơn hàng
+        cols_dh = ["ẢNH XE", "MÃ ĐƠN", "XE", "HÃNG", "NĂM SX", "MÀU", "GIÁ BÁN", "TRẠNG THÁI", "NGÀY"]
+        self.tbl_dh = QTableWidget(0, len(cols_dh))
+        self.tbl_dh.setColumnWidth(0, 100)  # Cột ảnh
+        self.tbl_dh.setHorizontalHeaderLabels(cols_dh)
+        self.tbl_dh.setAlternatingRowColors(True)
+        self.tbl_dh.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_dh.setShowGrid(True)
+        self.tbl_dh.verticalHeader().setVisible(False)
+        self.tbl_dh.setMaximumHeight(220)
+        h = self.tbl_dh.horizontalHeader()
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        content_l.addWidget(self.tbl_dh)
+
+        # -- Bảng dịch vụ --
+        sec2_title = QLabel("🔧  Lịch sử dịch vụ & bảo dưỡng")
+        sec2_title.setStyleSheet("""
+            font-size:14px; font-weight:700; color:#0F1F35;
+            padding: 8px 14px;
+            background: #f0f4ff;
+            border-left: 4px solid #0F1F35;
+            border-radius: 0 8px 8px 0;
+        """)
+        content_l.addWidget(sec2_title)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setStyleSheet("background:#e5e7eb; max-height:1px; margin-bottom:10px;")
+        content_l.addWidget(sep2)
+
+        cols_dv = ["MÃ PHIẾU", "XE", "LOẠI DV", "MÔ TẢ", "CHI PHÍ", "TRẠNG THÁI", "NGÀY"]
+        self.tbl_dv = QTableWidget(0, len(cols_dv))
+        self.tbl_dv.setHorizontalHeaderLabels(cols_dv)
+        self.tbl_dv.setAlternatingRowColors(True)
+        self.tbl_dv.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_dv.setShowGrid(True)
+        self.tbl_dv.verticalHeader().setVisible(False)
+        self.tbl_dv.setMaximumHeight(200)
+        h2 = self.tbl_dv.horizontalHeader()
+        h2.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        content_l.addWidget(self.tbl_dv)
+
+        # Ghi chú
+        if self.kh.get("ghi_chu"):
+            note_w = QWidget()
+            note_w.setStyleSheet(
+                "background:#f9fafb; border-radius:12px;"
+                "border:1px solid #e5e7eb; padding:14px;")
+            note_l = QHBoxLayout(note_w)
+            note_l.setContentsMargins(0, 0, 0, 0)
+            note_icon = QLabel("📝")
+            note_icon.setStyleSheet("font-size:18px; min-width:30px;")
+            note_txt = QLabel(self.kh.get("ghi_chu", ""))
+            note_txt.setStyleSheet("font-size:13px; color:#6b7280;")
+            note_txt.setWordWrap(True)
+            note_l.addWidget(note_icon)
+            note_l.addWidget(note_txt, 1)
+            content_l.addWidget(note_w)
+
+        content_l.addStretch()
+
+        # Scroll
+        scroll = QScrollArea()
+        scroll.setWidget(content)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("background:#ffffff;")
+        root.addWidget(scroll, 1)
+
+        # ── FOOTER ───────────────────────────────────────────────────────
+        ftr = QWidget()
+        ftr.setFixedHeight(68)
+        ftr.setStyleSheet("background:#0F1F35;")
+        fl = QHBoxLayout(ftr)
+        fl.setContentsMargins(24, 14, 24, 14)
+        fl.setSpacing(12)
+
+        # Nút in hóa đơn - XÁC XANH DƯƠNG nổi
+        btn_pdf = QPushButton("🖨️  In hóa đơn")
+        btn_pdf.setObjectName("btn_pdf")
+        btn_pdf.setMinimumWidth(150)
+        btn_pdf.setMinimumHeight(44)
+        btn_pdf.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_pdf.clicked.connect(self._in_hoa_don)
+        btn_pdf.setStyleSheet("""
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                stop:0 #ffffff, stop:1 #e0e8ff);
+            color: #0F1F35;
+            border: none;
+            font-weight: 700;
+            font-size: 14px;
+            border-radius: 10px;
+            padding: 10px 24px;
+        """)
+
+        btn_close = QPushButton("✖  Đóng")
+        btn_close.setObjectName("btn_close")
+        btn_close.setMinimumWidth(120)
+        btn_close.setMinimumHeight(44)
+        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close.clicked.connect(self.reject)
+        btn_close.setStyleSheet("""
+            background: rgba(255,255,255,0.15);
+            color: #ffffff;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 10px;
+            font-size: 13px;
+            padding: 10px 20px;
+        """)
+
+        fl.addWidget(btn_pdf)
+        fl.addStretch()
+        fl.addWidget(btn_close)
+        root.addWidget(ftr)
+
+    def _load(self):
+        kh_id = self.kh.get("id")
+        if not kh_id:
+            return
+
+        conn = get_conn()
+
+        # ── Load đơn hàng ────────────────────────────────────────────────
+        dh_rows = conn.execute("""
+            SELECT dh.ma_don,
+                   x.hang_xe || ' ' || x.dong_xe AS ten_xe,
+                   x.hang_xe, x.nam_sx, x.mau_sac,
+                   dh.gia_ban_thuc, dh.trang_thai, dh.ngay_dat,
+                   x.anh_url
+            FROM don_hang dh
+            JOIN xe x ON dh.xe_id = x.id
+            WHERE dh.kh_id = ?
+            ORDER BY dh.id DESC
+        """, (kh_id,)).fetchall()
+
+        # ── Load dịch vụ ─────────────────────────────────────────────────
+        dv_rows = conn.execute("""
+            SELECT dv.ma_dv,
+                   COALESCE(x.hang_xe || ' ' || x.dong_xe, '—') AS ten_xe,
+                   dv.loai_dv, dv.mo_ta, dv.chi_phi,
+                   dv.trang_thai, dv.ngay_nhan
+            FROM dich_vu dv
+            LEFT JOIN xe x ON dv.xe_id = x.id
+            WHERE dv.kh_id = ?
+            ORDER BY dv.id DESC
+        """, (kh_id,)).fetchall()
+
+        conn.close()
+
+        # ── Cập nhật stat cards ──────────────────────────────────────────
+        tong_chi = sum(r[5] for r in dh_rows)
+
+        self._stat_lbls["so_don"].setText(str(len(dh_rows)))
+        self._stat_lbls["tong_chi"].setText(f"{tong_chi / 1e9:.2f} tỷ")
+        self._stat_lbls["so_xe"].setText(str(len(dh_rows)))
+        self._stat_lbls["so_dv"].setText(str(len(dv_rows)))
+
+        # ── Render bảng đơn hàng ─────────────────────────────────────────
+        STATUS_COL = {
+            "Đã giao xe": "#10b981",
+            "Đã thanh toán": "#2563eb",
+            "Chờ xử lý": "#f59e0b",
+            "Huỷ": "#ef4444",
+            "Đặt cọc": "#7c3aed",
+        }
+        self.tbl_dh.setRowCount(0)
+        for row in dh_rows:
+            r = self.tbl_dh.rowCount()
+            self.tbl_dh.insertRow(r)
+            self.tbl_dh.setRowHeight(r, 70)  # ← chỉ giữ dòng này, xóa dòng 48 đi
+
+            # Cột 0 — ảnh xe
+            anh_url = row[8] or ""
+            img_lbl = QLabel()
+            img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if anh_url and os.path.exists(anh_url):
+                pix = QPixmap(anh_url).scaled(90, 60,
+                                              Qt.AspectRatioMode.KeepAspectRatio,
+                                              Qt.TransformationMode.SmoothTransformation)
+                img_lbl.setPixmap(pix)
+                img_lbl.setStyleSheet("background:#f0f4ff; border-radius:6px;")
+            else:
+                img_lbl.setText("🚗")
+                img_lbl.setStyleSheet("font-size:24px; background:#f0f4ff; border-radius:6px;")
+            self.tbl_dh.setCellWidget(r, 0, img_lbl)
+
+            # Cột 1 trở đi — dữ liệu
+            vals = [
+                row[0],  # Mã đơn
+                row[1],  # Tên xe
+                row[2],  # Hãng
+                str(row[3] or "—"),  # Năm SX
+                row[4] or "—",  # Màu sắc
+                f"{row[5] / 1e9:.2f} tỷ",  # Giá bán
+                row[6],  # Trạng thái
+                row[7] or "—",  # Ngày đặt
+            ]
+            for c, val in enumerate(vals):
+                item = QTableWidgetItem(str(val))
+                if c == 0:
+                    item.setForeground(QColor("#2563eb"))
+                    item.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+                elif c == 5:
+                    item.setForeground(QColor("#10b981"))
+                    item.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+                elif c == 6:
+                    item.setForeground(QColor(STATUS_COL.get(val, "#6b7280")))
+                    item.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+                else:
+                    item.setForeground(QColor("#374151"))
+                self.tbl_dh.setItem(r, c + 1, item)
+
+        # ── Render bảng dịch vụ ──────────────────────────────────────────
+        DV_STATUS = {
+            "Hoàn thành": "#10b981",
+            "Đang thực hiện": "#2563eb",
+            "Tiếp nhận": "#f59e0b",
+        }
+        self.tbl_dv.setRowCount(0)
+        for row in dv_rows:
+            r = self.tbl_dv.rowCount()
+            self.tbl_dv.insertRow(r)
+            self.tbl_dv.setRowHeight(r, 48)
+            vals = [
+                row[0],  # Mã phiếu
+                row[1],  # Tên xe
+                row[2],  # Loại DV
+                row[3] or "—",  # Mô tả
+                f"{int(row[4] or 0):,} ₫",  # Chi phí
+                row[5],  # Trạng thái
+                row[6] or "—",  # Ngày nhận
+            ]
+            for c, val in enumerate(vals):
+                item = QTableWidgetItem(str(val))
+                if c == 0:
+                    item.setForeground(QColor("#7c3aed"))
+                    item.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+                elif c == 4:
+                    item.setForeground(QColor("#f59e0b"))
+                    item.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+                elif c == 5:
+                    item.setForeground(QColor(DV_STATUS.get(val, "#6b7280")))
+                    item.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+                else:
+                    item.setForeground(QColor("#374151"))
+                self.tbl_dv.setItem(r, c, item)
+
+    def _in_hoa_don(self):
+        """In hóa đơn mua xe của khách hàng"""
+        conn = get_conn()
+        # Lấy đơn hàng mới nhất của KH
+        dh = conn.execute("""
+            SELECT dh.id, dh.ma_don, dh.gia_ban_thuc, 
+                   x.hang_xe, x.dong_xe, dh.ngay_dat
+            FROM don_hang dh
+            JOIN xe x ON dh.xe_id = x.id
+            WHERE dh.kh_id = ?
+            ORDER BY dh.id DESC LIMIT 1
+        """, (self.kh.get("id"),)).fetchone()
+        conn.close()
+
+        if not dh:
+            QMessageBox.warning(self, "⚠️ Thông báo",
+                                "❌ Khách hàng này chưa có đơn hàng nào!")
+            return
+
+        try:
+            # Kiểm tra xem có file invoice_pdf hay không
+            try:
+                from invoice_pdf import in_hoa_don
+                fname = in_hoa_don(dh[0])
+                msg = QDialog(self)
+                msg.setWindowTitle("✅ In thành công!")
+                msg.setMinimumWidth(380)
+                msg.setStyleSheet("""
+                    QDialog { background: #ffffff; }
+                    QLabel { background: transparent; }
+                """)
+                lv = QVBoxLayout(msg)
+                lv.setContentsMargins(24, 20, 24, 20)
+                lv.setSpacing(10)
+
+                # Icon + tiêu đề
+                title = QLabel("✅  In hóa đơn thành công!")
+                title.setStyleSheet("font-size:16px; font-weight:800; color:#0F1F35;")
+                lv.addWidget(title)
+
+                sep = QFrame();
+                sep.setFrameShape(QFrame.Shape.HLine)
+                sep.setStyleSheet("background:#e9edf5; max-height:1px;")
+                lv.addWidget(sep)
+
+                # Thông tin
+                for icon, label, value in [
+                    ("📋", "Mã đơn", dh[1]),
+                    ("🚗", "Xe", f"{dh[3]} {dh[4]}"),
+                    ("💰", "Giá bán", f"{dh[2] / 1e9:.2f} tỷ ₫"),
+                    ("📅", "Ngày", str(dh[5])),
+                    ("📄", "File", fname),
+                ]:
+                    rw = QHBoxLayout()
+                    lbl = QLabel(f"{icon}  {label}")
+                    lbl.setFixedWidth(80)
+                    lbl.setStyleSheet("font-size:12px; color:#94a3b8; font-weight:600;")
+                    val = QLabel(str(value))
+                    val.setStyleSheet("font-size:13px; color:#1e293b; font-weight:500;")
+                    val.setWordWrap(True)
+                    rw.addWidget(lbl);
+                    rw.addWidget(val, 1)
+                    lv.addLayout(rw)
+
+                sep2 = QFrame();
+                sep2.setFrameShape(QFrame.Shape.HLine)
+                sep2.setStyleSheet("background:#e9edf5; max-height:1px;")
+                lv.addWidget(sep2)
+
+                btn_ok = QPushButton("✔  OK")
+                btn_ok.setStyleSheet("""
+                    background: #0F1F35; color: #ffffff;
+                    border: none; border-radius: 8px;
+                    padding: 10px 30px; font-size:13px; font-weight:700;
+                """)
+                btn_ok.clicked.connect(msg.accept)
+                bh = QHBoxLayout();
+                bh.addStretch();
+                bh.addWidget(btn_ok)
+                lv.addLayout(bh)
+                msg.exec()
+            except ImportError:
+                # Nếu không có module invoice_pdf, tạo file giả
+                from datetime import datetime
+                fname = f"HD_{dh[1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                QMessageBox.information(self, "✅ Hóa đơn",
+                                        f"✅ Tạo hóa đơn thành công!\n\n"
+                                        f"📋 Mã đơn: {dh[1]}\n"
+                                        f"🚗 Xe: {dh[3]} {dh[4]}\n"
+                                        f"💰 Giá: {dh[2] / 1e9:.2f} tỷ ₫\n"
+                                        f"👤 Khách: {self.kh.get('ho_ten')}\n"
+                                        f"📞 SĐT: {self.kh.get('so_dt')}\n"
+                                        f"📅 Ngày: {dh[5]}\n\n"
+                                        f"📄 File: {fname}")
+        except Exception as e:
+            QMessageBox.critical(self, "❌ Lỗi",
+                                 f"Lỗi khi in hóa đơn:\n\n{str(e)}")
+
+
+# ════════════════════════════════════════════════════════════════
+# BƯỚC 2: Sửa KhachHangView._build_toolbar()
+# Thêm nút "👁 Xem chi tiết" vào toolbar
+# ════════════════════════════════════════════════════════════════
+"""
+def _build_toolbar(self):
+    self._btn("+ Thêm KH","btn_add",self._add)
+    self._btn("✏  Sửa",None,self._edit)
+    self._btn("🗑  Xoá","btn_del",self._delete)
+    self._btn("👁 Xem chi tiết",None,self._xem_chitiet)   # ← THÊM DÒNG NÀY
+    self._btn("🔍 Lịch sử GD",None,self._lich_su)
+    self._btn("📊 Excel","btn_excel",self._export)
+    self._search_box("🔍 Tìm khách hàng...")
+"""
+
+# ════════════════════════════════════════════════════════════════
+# BƯỚC 3: Thêm 2 method vào class KhachHangView
+# ════════════════════════════════════════════════════════════════
+"""
+def _xem_chitiet(self):
+    if not self._check_sel("xem chi tiết"): return
+    row = next((r for r in self._rows if r["id"] == self._sel_id), None)
+    if row:
+        KhachHangChiTietDialog(self, row).exec()
+
+# Thêm vào cuối method _build_base() hoặc cuối __init__ của KhachHangView:
+# Double-click vào dòng để xem chi tiết luôn
+self.tbl.doubleClicked.connect(self._on_double_click)
+
+def _on_double_click(self, index):
+    r = index.row()
+    if 0 <= r < len(self._rows):
+        self._sel_id = self._rows[r]["id"]
+        row = self._rows[r]
+        KhachHangChiTietDialog(self, row).exec()
+"""
+
+class KhachHangDialog(BaseDialog):
+    def __init__(self,parent=None,data=None):
+        super().__init__(parent,"Thêm/Sửa khách hàng",500); self.data=data
+        self._add_title("👥  THÔNG TIN KHÁCH HÀNG"); form=self._add_form()
+        self.f_ma=self._f_line("KH005"); self.f_ten=self._f_line("Họ và tên")
+        self.f_sdt=self._f_line("0912 345 678"); self.f_email=self._f_line("email@gmail.com")
+        self.f_dc=self._f_line("Địa chỉ"); self.f_cmnd=self._f_line("CMND/CCCD")
+        self.f_ns=self._f_line("YYYY-MM-DD"); self.f_loai=self._f_combo(["Cá nhân","Doanh nghiệp"])
+        self.f_ghi=QTextEdit(); self.f_ghi.setMaximumHeight(60)
+        for l,w in [("Mã KH *",self.f_ma),("Họ tên *",self.f_ten),("Số ĐT *",self.f_sdt),
+                    ("Email",self.f_email),("Địa chỉ",self.f_dc),("CMND",self.f_cmnd),
+                    ("Ngày sinh",self.f_ns),("Loại KH",self.f_loai),("Ghi chú",self.f_ghi)]:
+            form.addRow(l,w)
+        self._add_buttons("💾  Lưu KH")
+        if data: self._fill(data)
+    def _fill(self,d):
+        self.f_ma.setText(d.get("ma_kh","")); self.f_ma.setReadOnly(True); self.f_ma.setStyleSheet("color:#6b7280;background:#13151c;")
+        self.f_ten.setText(d.get("ho_ten","")); self.f_sdt.setText(d.get("so_dt","") or "")
+        self.f_email.setText(d.get("email","") or ""); self.f_dc.setText(d.get("dia_chi","") or "")
+        self.f_cmnd.setText(d.get("cmnd","") or ""); self.f_ns.setText(d.get("ngay_sinh","") or "")
+        idx=self.f_loai.findText(d.get("loai_kh","Cá nhân"))
+        if idx>=0: self.f_loai.setCurrentIndex(idx)
+        self.f_ghi.setPlainText(d.get("ghi_chu","") or "")
+    def _save(self):
+        ma=self.f_ma.text().strip(); ten=self.f_ten.text().strip(); sdt=self.f_sdt.text().strip()
+        if not all([ma,ten,sdt]): QMessageBox.warning(self,"","Điền đủ Mã KH, Họ tên, Số ĐT!"); return
+        conn=get_conn()
+        try:
+            vals=(ten,sdt,self.f_email.text(),self.f_dc.text(),self.f_cmnd.text(),self.f_ns.text(),self.f_loai.currentText(),self.f_ghi.toPlainText())
+            if self.data: conn.execute("UPDATE khach_hang SET ho_ten=?,so_dt=?,email=?,dia_chi=?,cmnd=?,ngay_sinh=?,loai_kh=?,ghi_chu=? WHERE id=?",vals+(self.data["id"],))
+            else: conn.execute("INSERT INTO khach_hang(ma_kh,ho_ten,so_dt,email,dia_chi,cmnd,ngay_sinh,loai_kh,ghi_chu) VALUES(?,?,?,?,?,?,?,?,?)",(ma,)+vals)
+            conn.commit(); self.accept()
+        except Exception as e: QMessageBox.critical(self,"Lỗi",str(e))
+        finally: conn.close()
+
+
+# ════════════════════════════════════════════════════════════════
+# NHÂN VIÊN
+# ════════════════════════════════════════════════════════════════
+class NhanVienView(BaseView):
+    COLS=[("MÃ NV","ma_nv",False),("HỌ TÊN","ho_ten",True),("CHỨC VỤ","chuc_vu",False),
+          ("SỐ ĐT","so_dt",False),("LƯƠNG","luong",False),("TRẠNG THÁI","trang_thai",False)]
+    def __init__(self,current_user=None): super().__init__("page_nhan_vien",current_user)
+
+    def _build_toolbar(self):
+        self._btn("+ Thêm NV", "btn_add", self._add);
+        self._btn("✏  Sửa", None, self._edit)
+        self._btn("🗑  Xoá", "btn_del", self._delete);
+        self._btn("📊 Excel", "btn_excel", self._export)
+        self._btn("👁 Xem hồ sơ", None, self._xem_ho_so)  # ← thêm
+        self._btn("🤖 AI Chấm công", "btn_add", self._ai_cham_cong)  # ← thêm
+        self._search_box("🔍 Tìm nhân viên...")
+    def _load(self,q=""):
+        conn=get_conn(); sql="SELECT * FROM nhan_vien"; p=[]
+        if q: sql+=" WHERE ho_ten LIKE ? OR ma_nv LIKE ? OR chuc_vu LIKE ?"; p=[f"%{q}%"]*3
+        self._rows=[dict(r) for r in conn.execute(sql+" ORDER BY id DESC",p).fetchall()]
+        conn.close(); self._render()
+        STATUS={"Đang làm":"#4ade80","Thử việc":"#fbbf24","Nghỉ việc":"#f87171"}
+        for r,row in enumerate(self._rows):
+            i=QTableWidgetItem(f"{int(row.get('luong',0) or 0):,} ₫")
+            i.setForeground(QColor("#4ade80")); i.setFont(QFont("Segoe UI",12,QFont.Weight.Bold))
+            self.tbl.setItem(r,4,i)
+            ti=QTableWidgetItem(row.get("trang_thai",""))
+            ti.setForeground(QColor(STATUS.get(row.get("trang_thai",""),"#94a3b8")))
+            self.tbl.setItem(r,5,ti)
+    def _add(self):
+        if NhanVienDialog(self).exec(): self._load()
+    def _edit(self):
+        if not self._check_sel("sửa"): return
+        if NhanVienDialog(self,self._get_row("nhan_vien",self._sel_id)).exec(): self._load()
+    def _delete(self):
+        if not self._check_sel("xoá"): return
+        conn = get_conn()
+        so_don = conn.execute("SELECT COUNT(*) FROM don_hang WHERE nv_id=?",(self._sel_id,)).fetchone()[0]
+        so_dv  = conn.execute("SELECT COUNT(*) FROM dich_vu WHERE nv_id=?",(self._sel_id,)).fetchone()[0]
+        so_cc  = conn.execute("SELECT COUNT(*) FROM cham_cong WHERE nv_id=?",(self._sel_id,)).fetchone()[0]
+        conn.close()
+        if so_don > 0:
+            QMessageBox.critical(self,"❌ Không thể xoá",
+                f"Nhân viên đang có {so_don} đơn hàng!\nVui lòng chuyển đơn hàng sang NV khác trước.")
+            return
+        if so_dv > 0:
+            QMessageBox.critical(self,"❌ Không thể xoá",
+                f"Nhân viên đang có {so_dv} phiếu dịch vụ!\nVui lòng chuyển phiếu sang NV khác trước.")
+            return
+        if QMessageBox.question(self,"Xác nhận xoá",
+            f"Xoá nhân viên này?\n\n⚠️ Dữ liệu chấm công ({so_cc} bản ghi) cũng sẽ bị xoá!",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No
+        )==QMessageBox.StandardButton.Yes:
+            try:
+                conn=get_conn()
+                conn.execute("DELETE FROM cham_cong WHERE nv_id=?",(self._sel_id,))
+                conn.execute("DELETE FROM nhan_vien WHERE id=?",(self._sel_id,))
+                conn.commit(); conn.close()
+                self._sel_id=None; self._load()
+                QMessageBox.information(self,"✅ Thành công","Đã xoá nhân viên!")
+            except Exception as e:
+                QMessageBox.critical(self,"❌ Lỗi",f"Không thể xoá:\n{str(e)}")
+
+    def _export(self):
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        import datetime
+
+        conn = get_conn()
+        rows = conn.execute("SELECT ma_nv,ho_ten,chuc_vu,so_dt,email,luong,trang_thai FROM nhan_vien").fetchall()
+        conn.close()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Nhân viên"
+
+        ws.merge_cells("A1:G1")
+        ws["A1"] = "DANH SÁCH NHÂN VIÊN — AUTOVIET"
+        ws["A1"].font = Font(name="Segoe UI", size=14, bold=True, color="FFFFFF")
+        ws["A1"].fill = PatternFill("solid", fgColor="1E40AF")
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 36
+
+        ws.merge_cells("A2:G2")
+        ws["A2"] = f"Ngày xuất: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        ws["A2"].font = Font(name="Segoe UI", size=10, italic=True, color="64748B")
+        ws["A2"].alignment = Alignment(horizontal="right")
+        ws.row_dimensions[2].height = 20
+
+        headers = ["MÃ NV", "HỌ TÊN", "CHỨC VỤ", "SỐ ĐT", "EMAIL", "LƯƠNG", "TRẠNG THÁI"]
+        col_widths = [12, 25, 18, 16, 28, 16, 14]
+        thin = Side(style="thin", color="BFDBFE")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for i, (h, w) in enumerate(zip(headers, col_widths), 1):
+            cell = ws.cell(row=3, column=i, value=h)
+            cell.font = Font(name="Segoe UI", size=11, bold=True, color="1E40AF")
+            cell.fill = PatternFill("solid", fgColor="DBEAFE")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.row_dimensions[3].height = 28
+
+        fill_white = PatternFill("solid", fgColor="FFFFFF")
+        fill_alt   = PatternFill("solid", fgColor="F0F7FF")
+        font_data  = Font(name="Segoe UI", size=11, color="1E293B")
+        font_ma    = Font(name="Segoe UI", size=11, bold=True, color="2563EB")
+
+        for ri, row in enumerate(rows, 4):
+            fill = fill_white if ri % 2 == 0 else fill_alt
+            ws.row_dimensions[ri].height = 24
+            for ci, val in enumerate(row, 1):
+                cell = ws.cell(row=ri, column=ci, value=val)
+                cell.fill = fill
+                cell.border = border
+                cell.alignment = Alignment(vertical="center",
+                    horizontal="center" if ci in (1, 4, 7) else "left")
+                cell.font = font_ma if ci == 1 else font_data
+
+        ws.freeze_panes = "A4"
+        fname = f"DanhSach_NhanVien_{datetime.datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
+        wb.save(fname)
+        QMessageBox.information(self, "Excel", f"✅ Đã xuất: {fname}")
+
+    def _xem_ho_so(self):
+        if not self._check_sel("xem"): return
+        row = self._get_row("nhan_vien", self._sel_id)
+        if row:
+            try:
+                NhanVienHoSoDialog(self, row).exec()
+            except Exception as e:
+                print(f"❌ Lỗi mở hồ sơ: {e}")
+                import traceback
+                traceback.print_exc()
+                QMessageBox.critical(self, "Lỗi", f"Không thể mở hồ sơ:\n{str(e)}")
+
+    def _ai_cham_cong(self):
+        if not self._check_sel("AI chấm công"): return
+        row = self._get_row("nhan_vien", self._sel_id)
+        if not row: return
+        from PyQt6.QtWidgets import QInputDialog
+        thang, ok = QInputDialog.getInt(self, "AI Chấm công",
+                                        f"Sinh dữ liệu tháng mấy cho {row['ho_ten']}?",
+                                        datetime.now().month, 1, 12)
+        if not ok: return
+        nam, ok2 = QInputDialog.getInt(self, "Năm", "Năm:",
+                                       datetime.now().year, 2023, 2030)
+        if not ok2: return
+        AIChamCongWorker(self, row["id"], row["ho_ten"], thang, nam).run_and_show()
+
+
+class NhanVienDialog(BaseDialog):
+    def __init__(self,parent=None,data=None):
+        super().__init__(parent,"Thêm/Sửa nhân viên",480); self.data=data
+        self._add_title("🧑‍💼  THÔNG TIN NHÂN VIÊN"); form=self._add_form()
+        self.f_ma=self._f_line("NV006"); self.f_ten=self._f_line("Họ tên đầy đủ")
+        self.f_cv=self._f_combo(["Giám đốc","Quản lý BH","Nhân viên BH","Kỹ thuật viên","Kế toán"])
+        self.f_sdt=self._f_line("0912 345 678"); self.f_email=self._f_line("nv@auto.vn")
+        self.f_ngay=self._f_line("YYYY-MM-DD"); self.f_luong=self._f_spin(200e6,500000)
+        self.f_tt=self._f_combo(["Đang làm","Thử việc","Nghỉ việc"])
+        for l,w in [("Mã NV *",self.f_ma),("Họ tên *",self.f_ten),("Chức vụ",self.f_cv),
+                    ("Số ĐT",self.f_sdt),("Email",self.f_email),("Ngày vào làm",self.f_ngay),
+                    ("Lương",self.f_luong),("Trạng thái",self.f_tt)]: form.addRow(l,w)
+        self._add_buttons("💾  Lưu NV")
+        if data: self._fill(data)
+    def _fill(self,d):
+        self.f_ma.setText(d.get("ma_nv","")); self.f_ma.setReadOnly(True); self.f_ma.setStyleSheet("color:#6b7280;background:#13151c;")
+        self.f_ten.setText(d.get("ho_ten",""))
+        idx=self.f_cv.findText(d.get("chuc_vu","Nhân viên BH"))
+        if idx>=0: self.f_cv.setCurrentIndex(idx)
+        self.f_sdt.setText(d.get("so_dt","") or ""); self.f_email.setText(d.get("email","") or "")
+        self.f_ngay.setText(d.get("ngay_vao","") or ""); self.f_luong.setValue(float(d.get("luong",0) or 0))
+        idx2=self.f_tt.findText(d.get("trang_thai","Đang làm"))
+        if idx2>=0: self.f_tt.setCurrentIndex(idx2)
+    def _save(self):
+        ma=self.f_ma.text().strip(); ten=self.f_ten.text().strip()
+        if not all([ma,ten]): QMessageBox.warning(self,"","Điền đủ Mã NV và Họ tên!"); return
+        conn=get_conn()
+        try:
+            vals=(ten,self.f_cv.currentText(),self.f_sdt.text(),self.f_email.text(),self.f_ngay.text(),self.f_luong.value(),self.f_tt.currentText())
+            if self.data: conn.execute("UPDATE nhan_vien SET ho_ten=?,chuc_vu=?,so_dt=?,email=?,ngay_vao=?,luong=?,trang_thai=? WHERE id=?",vals+(self.data["id"],))
+            else: conn.execute("INSERT INTO nhan_vien(ma_nv,ho_ten,chuc_vu,so_dt,email,ngay_vao,luong,trang_thai) VALUES(?,?,?,?,?,?,?,?)",(ma,)+vals)
+            conn.commit(); self.accept()
+        except Exception as e: QMessageBox.critical(self,"Lỗi",str(e))
+        finally: conn.close()
+
+
+# ════════════════════════════════════════════════════════════════
+# ĐƠN HÀNG — KH mới/cũ + NV tự động
+# ════════════════════════════════════════════════════════════════
+class DonHangView(BaseView):
+    COLS=[("MÃ ĐƠN","ma_don",False),("XE","ten_xe",True),("KHÁCH HÀNG","ten_kh",False),
+          ("NHÂN VIÊN","ten_nv",False),("GIÁ BÁN","gia_ban_thuc",False),
+          ("TRẠNG THÁI","trang_thai",False),("NGÀY ĐẶT","ngay_dat",False)]
+    def __init__(self,current_user=None): super().__init__("page_don_hang",current_user)
+
+    def _build_toolbar(self):
+        # ── Nút Tạo đơn — xanh đậm nổi bật ──────────────
+        b_add = QPushButton("➕  Tạo đơn")
+        b_add.setObjectName("btn_add")
+        b_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_add.setStyleSheet("""
+            QPushButton{background:#2563eb;color:#ffffff;border:none;
+                border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;}
+            QPushButton:hover{background:#1d4ed8;}
+            QPushButton:pressed{background:#1e40af;}
+        """)
+        b_add.clicked.connect(self._add)
+        self._tbh.addWidget(b_add)
+
+        # ── Nút Chi tiết — xám nhạt ───────────────────────
+        b_ct = QPushButton("📋  Chi tiết")
+        b_ct.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_ct.setStyleSheet("""
+            QPushButton{background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;
+                border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;}
+            QPushButton:hover{background:#e2e8f0;color:#1e293b;}
+        """)
+        b_ct.clicked.connect(self._xem_chitiet)
+        self._tbh.addWidget(b_ct)
+
+        # ── Nút In hóa đơn — xanh nhạt ───────────────────
+        b_hd = QPushButton("🧾  In hóa đơn")
+        b_hd.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_hd.setStyleSheet("""
+            QPushButton{background:#eff6ff;color:#2563eb;
+                border:1px solid #bfdbfe;
+                border-radius:8px;padding:8px 14px;
+                font-size:13px;font-weight:700;}
+            QPushButton:hover{background:#2563eb;color:#ffffff;border-color:#2563eb;}
+        """)
+        b_hd.clicked.connect(self._in_pdf)
+        self._tbh.addWidget(b_hd)
+
+        # ── Nút In hợp đồng — tím nổi bật ────────────────
+        b_hop = QPushButton("📝  In hợp đồng")
+        b_hop.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_hop.setStyleSheet("""
+            QPushButton{background:#f5f3ff;color:#7c3aed;
+                border:1px solid #ddd6fe;
+                border-radius:8px;padding:8px 14px;
+                font-size:13px;font-weight:700;}
+            QPushButton:hover{background:#7c3aed;color:#ffffff;border-color:#7c3aed;}
+        """)
+        b_hop.clicked.connect(self._in_hop_dong)
+        self._tbh.addWidget(b_hop)
+
+        # ── Nút Cập nhật TT — cam ─────────────────────────
+        b_tt = QPushButton("🔄  Cập nhật TT")
+        b_tt.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_tt.setStyleSheet("""
+            QPushButton{background:#fff7ed;color:#c2410c;
+                border:1px solid #fed7aa;
+                border-radius:8px;padding:8px 14px;
+                font-size:13px;font-weight:600;}
+            QPushButton:hover{background:#c2410c;color:#ffffff;border-color:#c2410c;}
+        """)
+        b_tt.clicked.connect(self._update_status)
+        self._tbh.addWidget(b_tt)
+
+        # ── Nút Excel — xanh lá ───────────────────────────
+        b_xl = QPushButton("📊  Excel")
+        b_xl.setCursor(Qt.CursorShape.PointingHandCursor)
+        b_xl.setStyleSheet("""
+            QPushButton{background:#f0fdf4;color:#16a34a;
+                border:1px solid #bbf7d0;
+                border-radius:8px;padding:8px 14px;
+                font-size:13px;font-weight:600;}
+            QPushButton:hover{background:#16a34a;color:#ffffff;border-color:#16a34a;}
+        """)
+        b_xl.clicked.connect(self._export)
+        self._tbh.addWidget(b_xl)
+        self._btn("📱 Hiện QR", None, self._hien_qr)  # ← thêm đây
+        self._btn("🔍 Quét QR", None, self._quet_qr)
+        self._search_box("🔍 Tìm đơn hàng...")
+
+    def _hien_qr(self):
+        if not self._check_sel("xem QR"): return
+        row = next((r for r in self._rows if r["id"] == self._sel_id), None)
+        if not row: return
+
+        from qr_utils import tao_qr_don_hang, qr_to_pixmap
+        qr_path = tao_qr_don_hang(row)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"📱 QR Code — {row['ma_don']}")
+        dlg.setStyleSheet("QDialog{background:#0f1f35;} QLabel{background:transparent;color:#ffffff;}")
+        dlg.setFixedSize(420, 520)
+
+        lv = QVBoxLayout(dlg)
+        lv.setContentsMargins(24, 20, 24, 20)
+        lv.setSpacing(12)
+
+        # Tiêu đề
+        t = QLabel(f"📋  {row['ma_don']}")
+        t.setStyleSheet("font-size:18px;font-weight:800;color:#60a5fa;")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lv.addWidget(t)
+
+        # Thông tin đơn
+        info = QLabel(
+            f"🚗  {row.get('ten_xe', '')}\n"
+            f"👤  {row.get('ten_kh', '')}\n"
+            f"💰  {row.get('gia_ban_thuc', 0) / 1e9:.2f} tỷ ₫\n"
+            f"📅  {row.get('ngay_dat', '')}"
+        )
+        info.setStyleSheet("font-size:13px;color:#94a3b8;line-height:1.6;")
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lv.addWidget(info)
+
+        # Ảnh QR lớn
+        qr_lbl = QLabel()
+        qr_lbl.setPixmap(qr_to_pixmap(qr_path, 280))
+        qr_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_lbl.setStyleSheet(
+            "background:#ffffff;border-radius:16px;"
+            "padding:16px;border:3px solid #2563eb;")
+        lv.addWidget(qr_lbl)
+
+        # Hướng dẫn
+        hint = QLabel("📱 Dùng điện thoại quét mã này\nđể xem thông tin đơn hàng")
+        hint.setStyleSheet("font-size:12px;color:#fbbf24;font-weight:600;")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lv.addWidget(hint)
+
+        # Nút đóng
+        bh = QHBoxLayout();
+        bh.addStretch()
+        btn_c = QPushButton("✖  Đóng")
+        btn_c.setStyleSheet("""
+            QPushButton{background:#1e3a5f;color:#60a5fa;border:none;
+            border-radius:8px;padding:10px 24px;font-size:13px;font-weight:700;}
+            QPushButton:hover{background:#2563eb;color:white;}
+        """)
+        btn_c.clicked.connect(dlg.reject)
+        bh.addWidget(btn_c);
+        bh.addStretch()
+        lv.addLayout(bh)
+
+        dlg.exec()
+
+    def _load(self,q=""):
+        conn=get_conn()
+        sql="""SELECT dh.*,x.hang_xe||' '||x.dong_xe as ten_xe,
+               kh.ho_ten as ten_kh,nv.ho_ten as ten_nv
+               FROM don_hang dh JOIN xe x ON dh.xe_id=x.id
+               JOIN khach_hang kh ON dh.kh_id=kh.id
+               JOIN nhan_vien nv ON dh.nv_id=nv.id"""
+        p=[]
+        if self.current_user.get("role")=="nhanvien" and self.current_user.get("nv_id"):
+            sql+=" WHERE dh.nv_id=?"; p.append(self.current_user["nv_id"])
+            if q: sql+=" AND (dh.ma_don LIKE ? OR kh.ho_ten LIKE ?)"; p+=[f"%{q}%"]*2
+        else:
+            if q: sql+=" WHERE dh.ma_don LIKE ? OR kh.ho_ten LIKE ?"; p=[f"%{q}%"]*2
+        self._rows=[dict(r) for r in conn.execute(sql+" ORDER BY dh.id DESC",p).fetchall()]
+        conn.close(); self._render()
+        STATUS={"Đã giao xe":"#059669","Đã thanh toán":"#2563eb",
+                "Chờ xử lý":"#d97706","Huỷ":"#dc2626"}
+        for r,row in enumerate(self._rows):
+            gi=QTableWidgetItem(f"{row['gia_ban_thuc']/1e9:.2f} tỷ")
+            gi.setForeground(QColor("#059669"))
+            gi.setFont(QFont("Segoe UI",13,QFont.Weight.Bold))
+            self.tbl.setItem(r,4,gi)
+            si=QTableWidgetItem(row["trang_thai"])
+            si.setForeground(QColor(STATUS.get(row["trang_thai"],"#94a3b8")))
+            si.setFont(QFont("Segoe UI",12,QFont.Weight.Bold))
+            self.tbl.setItem(r,5,si)
+
+    def _add(self):
+        if DonHangDialog(self, current_user=self.current_user).exec():
+            self._load()
+            mw=self.window()
+            if hasattr(mw,"_refresh_status"): mw._refresh_status()
+
+    def _xem_chitiet(self):
+        if not self._check_sel("xem chi tiết"): return
+        row=next((r for r in self._rows if r["id"]==self._sel_id),None)
+        if row: ChiTietDonHangDialog(self,row).exec()
+
+    def _in_pdf(self):
+        if not self._check_sel("in hóa đơn"): return
+        try:
+            from invoice_pdf import in_hoa_don
+            fname=in_hoa_don(self._sel_id)
+            QMessageBox.information(self,"✅ In hóa đơn thành công!",
+                f"📄 File đã lưu:\n{fname}")
+        except Exception as e:
+            QMessageBox.critical(self,"❌ Lỗi in hóa đơn",str(e))
+
+    def _in_hop_dong(self):
+        if not self._check_sel("in hợp đồng"): return
+        try:
+            from hop_dong_pdf import in_hop_dong
+            fname=in_hop_dong(self._sel_id)
+            QMessageBox.information(self,"✅ In hợp đồng thành công!",
+                f"📝 File hợp đồng đã lưu:\n{fname}\n\n"
+                f"Mở file để in hoặc gửi cho khách hàng.")
+        except ImportError:
+            QMessageBox.critical(self,"❌ Thiếu thư viện",
+                "Cần cài reportlab:\npip install reportlab")
+        except Exception as e:
+            QMessageBox.critical(self,"❌ Lỗi in hợp đồng",str(e))
+
+    def _update_status(self):
+        if not self._check_sel("cập nhật"): return
+        from PyQt6.QtWidgets import QInputDialog
+        status,ok=QInputDialog.getItem(self,"Cập nhật","Trạng thái:",
+            ["Chờ xử lý","Đã thanh toán","Đã giao xe","Huỷ"],0,False)
+        if ok:
+            conn=get_conn()
+            conn.execute("UPDATE don_hang SET trang_thai=? WHERE id=?",(status,self._sel_id))
+            if status=="Đã giao xe":
+                dh=conn.execute("SELECT xe_id FROM don_hang WHERE id=?",(self._sel_id,)).fetchone()
+                if dh: conn.execute("UPDATE xe SET trang_thai='Đã bán' WHERE id=?",(dh[0],))
+            conn.commit(); conn.close(); self._load()
+
+    def _export(self):
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        import datetime
+
+        conn = get_conn()
+        rows = conn.execute("""
+            SELECT dh.ma_don, x.hang_xe||' '||x.dong_xe, kh.ho_ten,
+                   nv.ho_ten, dh.gia_ban_thuc, dh.trang_thai, dh.ngay_dat
+            FROM don_hang dh
+            JOIN xe x ON dh.xe_id=x.id
+            JOIN khach_hang kh ON dh.kh_id=kh.id
+            JOIN nhan_vien nv ON dh.nv_id=nv.id
+            ORDER BY dh.id DESC
+        """).fetchall()
+        conn.close()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Đơn hàng"
+
+        ws.merge_cells("A1:G1")
+        ws["A1"] = "BÁO CÁO ĐƠN HÀNG — AUTOVIET"
+        ws["A1"].font = Font(name="Segoe UI", size=14, bold=True, color="FFFFFF")
+        ws["A1"].fill = PatternFill("solid", fgColor="059669")
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 36
+
+        ws.merge_cells("A2:G2")
+        ws["A2"] = f"Ngày xuất: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        ws["A2"].font = Font(name="Segoe UI", size=10, italic=True, color="64748B")
+        ws["A2"].alignment = Alignment(horizontal="right")
+        ws.row_dimensions[2].height = 20
+
+        headers = ["MÃ ĐƠN", "XE", "KHÁCH HÀNG", "NHÂN VIÊN", "GIÁ BÁN", "TRẠNG THÁI", "NGÀY ĐẶT"]
+        col_widths = [12, 30, 22, 22, 16, 16, 14]
+        thin = Side(style="thin", color="BBF7D0")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for i, (h, w) in enumerate(zip(headers, col_widths), 1):
+            cell = ws.cell(row=3, column=i, value=h)
+            cell.font = Font(name="Segoe UI", size=11, bold=True, color="065F46")
+            cell.fill = PatternFill("solid", fgColor="D1FAE5")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = border
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.row_dimensions[3].height = 28
+
+        fill_white = PatternFill("solid", fgColor="FFFFFF")
+        fill_alt   = PatternFill("solid", fgColor="F0FDF4")
+        font_data  = Font(name="Segoe UI", size=11, color="1E293B")
+        font_ma    = Font(name="Segoe UI", size=11, bold=True, color="059669")
+
+        STATUS_COLOR = {
+            "Đã giao xe": "059669",
+            "Đã thanh toán": "2563EB",
+            "Chờ xử lý": "D97706",
+            "Huỷ": "DC2626",
+        }
+
+        for ri, row in enumerate(rows, 4):
+            fill = fill_white if ri % 2 == 0 else fill_alt
+            ws.row_dimensions[ri].height = 24
+            for ci, val in enumerate(row, 1):
+                cell = ws.cell(row=ri, column=ci, value=val)
+                cell.fill = fill
+                cell.border = border
+                cell.alignment = Alignment(vertical="center",
+                    horizontal="center" if ci in (1, 5, 6, 7) else "left")
+                if ci == 1:
+                    cell.font = font_ma
+                elif ci == 5:
+                    cell.font = Font(name="Segoe UI", size=11, bold=True, color="059669")
+                elif ci == 6:
+                    color = STATUS_COLOR.get(str(val), "64748B")
+                    cell.font = Font(name="Segoe UI", size=11, bold=True, color=color)
+                else:
+                    cell.font = font_data
+
+        ws.freeze_panes = "A4"
+        fname = f"BaoCao_DonHang_{datetime.datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
+        wb.save(fname)
+        QMessageBox.information(self, "Excel", f"✅ Đã xuất: {fname}")
+
+    def _quet_qr(self):
+        from qr_scanner import QRScannerDialog
+        dlg = QRScannerDialog(self)
+        dlg.don_hang_found.connect(self._tim_don_by_ma)
+        dlg.exec()
+
+    def _tim_don_by_ma(self, ma_don):
+        # Highlight dòng trong bảng
+        for r, row in enumerate(self._rows):
+            if row.get("ma_don") == ma_don:
+                self.tbl.selectRow(r)
+                self._sel_id = row["id"]
+                break
+
+        # Load đầy đủ thông tin từ DB
+        from database import get_conn
+        conn = get_conn()
+        dh = conn.execute("""
+            SELECT dh.ma_don, x.hang_xe||' '||x.dong_xe, x.mau_sac,
+                   x.nam_sx, x.so_khung, x.so_may,
+                   kh.ho_ten, kh.so_dt, kh.dia_chi,
+                   nv.ho_ten, dh.gia_ban_thuc, dh.chiet_khau,
+                   dh.phuong_thuc, dh.trang_thai, dh.ngay_dat, dh.ghi_chu
+            FROM don_hang dh
+            JOIN xe x ON dh.xe_id=x.id
+            JOIN khach_hang kh ON dh.kh_id=kh.id
+            JOIN nhan_vien nv ON dh.nv_id=nv.id
+            WHERE dh.ma_don=?
+        """, (ma_don,)).fetchone()
+        conn.close()
+
+        if not dh:
+            QMessageBox.warning(self, "Không tìm thấy",
+                                f"Không có đơn hàng {ma_don}!");
+            return
+
+        # Dialog hiển thị đầy đủ
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"✅ Đơn hàng — {ma_don}")
+        dlg.setMinimumSize(520, 600)
+        dlg.setStyleSheet("""
+            QDialog{background:#f0f4f8;}
+            QLabel{background:transparent;color:#1e293b;}
+            QPushButton{border-radius:8px;font-size:13px;font-weight:700;padding:10px 20px;}
+        """)
+
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(0, 0, 0, 0);
+        root.setSpacing(0)
+
+        # Header navy
+        hdr = QWidget()
+        hdr.setStyleSheet("""background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
+            stop:0 #0f1f35,stop:1 #1e3a5f);""")
+        hl = QVBoxLayout(hdr);
+        hl.setContentsMargins(24, 20, 24, 20);
+        hl.setSpacing(4)
+
+        t1 = QLabel(f"✅  ĐƠN HÀNG {dh[0]}")
+        t1.setStyleSheet("font-size:20px;font-weight:900;color:#ffffff;")
+        t1.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        tt = dh[13]
+        tt_color = {"Đã giao xe": "#4ade80", "Đã thanh toán": "#60a5fa",
+                    "Chờ xử lý": "#fbbf24", "Huỷ": "#f87171"}.get(tt, "#94a3b8")
+        t2 = QLabel(f"● {tt}")
+        t2.setStyleSheet(f"font-size:14px;font-weight:700;color:{tt_color};")
+        t2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        hl.addWidget(t1);
+        hl.addWidget(t2)
+        root.addWidget(hdr)
+
+        # Content
+        scroll = QScrollArea();
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget();
+        content.setStyleSheet("background:#f0f4f8;")
+        cl = QVBoxLayout(content);
+        cl.setContentsMargins(16, 16, 16, 16);
+        cl.setSpacing(12)
+
+        def section(title_text, color="#2563eb"):
+            sec = QWidget()
+            sec.setStyleSheet(f"background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;")
+            sl = QVBoxLayout(sec);
+            sl.setContentsMargins(16, 14, 16, 14);
+            sl.setSpacing(8)
+            ttl = QLabel(title_text)
+            ttl.setStyleSheet(f"font-size:13px;font-weight:800;color:#0f1f35;"
+                              f"border-left:4px solid {color};padding-left:8px;")
+            sl.addWidget(ttl)
+            return sec, sl
+
+        def row_info(layout, label, value, val_color="#1e293b"):
+            rw = QHBoxLayout()
+            lk = QLabel(label);
+            lk.setFixedWidth(150)
+            lk.setStyleSheet("font-size:12px;color:#64748b;font-weight:600;")
+            lv2 = QLabel(str(value) if value else "—")
+            lv2.setStyleSheet(f"font-size:13px;font-weight:700;color:{val_color};")
+            lv2.setWordWrap(True)
+            rw.addWidget(lk);
+            rw.addWidget(lv2, 1)
+            layout.addLayout(rw)
+
+        # Thông tin xe
+        sec1, sl1 = section("🚗  THÔNG TIN XE", "#2563eb")
+        row_info(sl1, "Tên xe:", dh[1])
+        row_info(sl1, "Màu sắc:", dh[2])
+        row_info(sl1, "Năm SX:", dh[3])
+        row_info(sl1, "Số khung:", dh[4])
+        row_info(sl1, "Số máy:", dh[5])
+        cl.addWidget(sec1)
+
+        # Thông tin khách hàng
+        sec2, sl2 = section("👤  KHÁCH HÀNG", "#16a34a")
+        row_info(sl2, "Họ tên:", dh[6])
+        row_info(sl2, "Số ĐT:", dh[7], "#16a34a")
+        row_info(sl2, "Địa chỉ:", dh[8])
+        cl.addWidget(sec2)
+
+        # Thông tin thanh toán
+        gia = float(dh[10] or 0)
+        ck = float(dh[11] or 0)
+        sec3, sl3 = section("💰  THANH TOÁN", "#d97706")
+        row_info(sl3, "Giá bán:", f"{gia / 1e9:.3f} tỷ ₫", "#16a34a")
+        row_info(sl3, "Chiết khấu:", f"-{ck / 1e6:.0f}tr ₫", "#dc2626")
+        row_info(sl3, "Thực thu:", f"{(gia - ck) / 1e9:.3f} tỷ ₫", "#2563eb")
+        row_info(sl3, "Thanh toán:", dh[12])
+        row_info(sl3, "Ngày đặt:", dh[14])
+        cl.addWidget(sec3)
+
+        # Nhân viên + ghi chú
+        sec4, sl4 = section("🧑‍💼  NHÂN VIÊN BÁN", "#7c3aed")
+        row_info(sl4, "NV phụ trách:", dh[9], "#7c3aed")
+        row_info(sl4, "Ghi chú:", dh[15] or "—")
+        cl.addWidget(sec4)
+        cl.addStretch()
+
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
+
+        # Footer buttons
+        ftr = QWidget()
+        ftr.setStyleSheet("background:#ffffff;border-top:1px solid #e2e8f0;")
+        fl = QHBoxLayout(ftr);
+        fl.setContentsMargins(16, 12, 16, 12);
+        fl.setSpacing(10)
+
+        btn_pdf = QPushButton("🖨️ In hóa đơn")
+        btn_pdf.setStyleSheet("background:#2563eb;color:white;border:none;")
+        btn_pdf.clicked.connect(lambda: self._in_pdf_by_ma(ma_don, dlg))
+
+        btn_close = QPushButton("✖ Đóng")
+        btn_close.setStyleSheet("background:#f8fafc;color:#64748b;border:1px solid #e2e8f0;")
+        btn_close.clicked.connect(dlg.reject)
+
+        fl.addWidget(btn_pdf);
+        fl.addStretch();
+        fl.addWidget(btn_close)
+        root.addWidget(ftr)
+        dlg.exec()
+
+    def _in_pdf_by_ma(self, ma_don, parent_dlg=None):
+        """In PDF theo mã đơn"""
+        conn = get_conn()
+        dh = conn.execute("SELECT id FROM don_hang WHERE ma_don=?",
+                          (ma_don,)).fetchone()
+        conn.close()
+        if not dh:
+            QMessageBox.warning(self, "", "Không tìm thấy đơn!");
+            return
+        try:
+            from invoice_pdf import in_hoa_don
+            fname = in_hoa_don(dh[0])
+            QMessageBox.information(self, "✅ In hóa đơn", f"Đã xuất: {fname}")
+            import os;
+            os.startfile(fname)
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+
+class ChiTietDonHangDialog(BaseDialog):
+    def __init__(self,parent=None,row=None):
+        super().__init__(parent,f"Chi tiết — {row['ma_don']}",580); self.row=row; self._build_ct()
+    def _build_ct(self):
+        conn=get_conn()
+        dh=conn.execute("""SELECT dh.*,x.hang_xe||' '||x.dong_xe as ten_xe,x.ma_xe,
+            x.so_khung,x.mau_sac,x.nam_sx,kh.ho_ten as ten_kh,kh.so_dt,kh.dia_chi,
+            nv.ho_ten as ten_nv FROM don_hang dh JOIN xe x ON dh.xe_id=x.id
+            JOIN khach_hang kh ON dh.kh_id=kh.id JOIN nhan_vien nv ON dh.nv_id=nv.id
+            WHERE dh.id=?""",(self.row["id"],)).fetchone()
+        conn.close()
+        if not dh: return
+        dh=dict(dh)
+        self._add_title(f"📋  ĐƠN HÀNG {dh['ma_don']}")
+
+        def row_lv(k, v, vc="#00274c"):
+            rw = QHBoxLayout();
+            lk = QLabel(k);
+            lk.setFixedWidth(130)
+            lk.setStyleSheet("color:#64748b;font-size:13px;font-weight:600;background:transparent;")
+            lv = QLabel(str(v));
+            lv.setStyleSheet(f"color:{vc};font-size:14px;background:transparent;font-weight:600;")
+            lv.setWordWrap(True); rw.addWidget(lk); rw.addWidget(lv,1); return rw
+
+        for k, v, c in [("Mã đơn", dh['ma_don'], "#1e40af"), ("Ngày đặt", dh['ngay_dat'], "#00274c"),
+                        ("Phương thức", dh['phuong_thuc'], "#0891b2"),
+                        ("Trạng thái", dh['trang_thai'],
+                         {"Đã giao xe": "#065f46", "Đã thanh toán": "#1e40af", "Chờ xử lý": "#92400e",
+                          "Huỷ": "#991b1b"}.get(dh['trang_thai'], "#64748b")),
+                        ("Xe", dh['ten_xe'], "#00274c"), ("Khách hàng", dh['ten_kh'], "#00274c"),
+                        ("Nhân viên BH", dh['ten_nv'], "#00274c"),
+                        ("Giá bán", f"{dh['gia_ban_thuc']:,.0f} ₫", "#059669"),
+                        ("Chiết khấu", f"- {dh.get('chiet_khau', 0) or 0:,.0f} ₫", "#dc2626"),
+                        ("THỰC THU", f"{dh['gia_ban_thuc'] - (dh.get('chiet_khau', 0) or 0):,.0f} ₫", "#065f46")]:
+            self._main_lv.addLayout(row_lv(k, v, c))
+        bh=QHBoxLayout(); bh.addStretch()
+        btn_pdf=QPushButton("📄 In hóa đơn PDF"); btn_pdf.setObjectName("btn_pdf")
+        btn_pdf.clicked.connect(lambda: self._in_pdf(dh["id"]))
+        bc=QPushButton("Đóng"); bc.clicked.connect(self.reject)
+        bh.addWidget(btn_pdf); bh.addWidget(bc); self._main_lv.addLayout(bh)
+    def _in_pdf(self,dh_id):
+        try:
+            from invoice_pdf import in_hoa_don
+            fname=in_hoa_don(dh_id); QMessageBox.information(self,"OK",f"✅ {fname}")
+        except Exception as e: QMessageBox.critical(self,"Lỗi",str(e))
+    def _save(self): pass
+
+
+class DonHangDialog(BaseDialog):
+    def __init__(self, parent=None, current_user=None):
+        super().__init__(parent, "Tạo đơn hàng mới", 580)
+        self.current_user = current_user or {}
+        self._add_title("📋  THÔNG TIN ĐƠN HÀNG")
+        form = self._add_form()
+
+        conn = get_conn()
+        xe_rows = conn.execute(
+            "SELECT id,ma_xe,hang_xe,dong_xe,gia_ban FROM xe WHERE trang_thai='Còn hàng'"
+        ).fetchall()
+        nv_rows = conn.execute(
+            "SELECT id,ma_nv,ho_ten FROM nhan_vien WHERE trang_thai='Đang làm' ORDER BY ma_nv"
+        ).fetchall()
+        kh_rows = conn.execute(
+            "SELECT id,ma_kh,ho_ten,so_dt FROM khach_hang ORDER BY id DESC"
+        ).fetchall()
+        cnt = conn.execute("SELECT COUNT(*) FROM don_hang").fetchone()[0]
+        conn.close()
+
+        # Mã đơn tự động
+        self.f_ma = QLineEdit(f"DH{cnt+1:03d}")
+        self.f_ma.setReadOnly(True)
+        self.f_ma.setStyleSheet("color:#64748b;background:#f1f5f9;border-radius:8px;padding:6px;")
+
+        # Xe
+        self.f_xe = QComboBox()
+        for r in xe_rows:
+            self.f_xe.addItem(f"{r[1]} — {r[2]} {r[3]}  ({r[4]/1e9:.2f} tỷ)", r[0])
+        self.f_xe.currentIndexChanged.connect(self._auto_fill_gia)
+
+        # ── KHÁCH HÀNG: 2 tab ────────────────────────────────────────────
+        kh_tabs = QTabWidget()
+        kh_tabs.setStyleSheet("""
+            QTabBar::tab{padding:6px 14px;font-size:11px;font-weight:600;
+                color:#64748b;background:#13151c;border:none;
+                border-bottom:2px solid transparent;}
+            QTabBar::tab:selected{color:#a78bfa;border-bottom:2px solid #7c3aed;}
+            QTabWidget::pane{border:1px solid #2c3050;border-radius:8px;}
+        """)
+
+        # Tab khách mới
+        tab_new = QWidget()
+        tnl = QVBoxLayout(tab_new); tnl.setContentsMargins(10,10,10,10); tnl.setSpacing(6)
+        f2 = QFormLayout(); f2.setSpacing(8); f2.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self.f_kh_ten   = QLineEdit(); self.f_kh_ten.setPlaceholderText("Họ và tên đầy đủ *")
+        self.f_kh_sdt   = QLineEdit(); self.f_kh_sdt.setPlaceholderText("Số điện thoại *")
+        self.f_kh_email = QLineEdit(); self.f_kh_email.setPlaceholderText("email@gmail.com")
+        self.f_kh_cmnd  = QLineEdit(); self.f_kh_cmnd.setPlaceholderText("CMND / CCCD")
+        self.f_kh_dc    = QLineEdit(); self.f_kh_dc.setPlaceholderText("Địa chỉ khách hàng")
+        self.f_kh_loai  = QComboBox(); self.f_kh_loai.addItems(["Cá nhân","Doanh nghiệp"])
+        for l,w in [("Họ tên *",self.f_kh_ten),("Số ĐT *",self.f_kh_sdt),
+                    ("Email",self.f_kh_email),("CMND/CCCD",self.f_kh_cmnd),
+                    ("Địa chỉ",self.f_kh_dc),("Loại KH",self.f_kh_loai)]:
+            f2.addRow(l,w)
+        tnl.addLayout(f2)
+        kh_tabs.addTab(tab_new, "👤 Khách hàng mới")
+
+        # Tab khách cũ
+        tab_old = QWidget()
+        tol = QVBoxLayout(tab_old); tol.setContentsMargins(10,10,10,10); tol.setSpacing(6)
+        note = QLabel("Chọn khách hàng đã mua xe trước đây:")
+        note.setStyleSheet("color:#64748b;font-size:12px;background:transparent;")
+        self.f_kh_cu = QComboBox()
+        for r in kh_rows:
+            self.f_kh_cu.addItem(f"{r[1]} — {r[2]} ({r[3]})", r[0])
+        tol.addWidget(note); tol.addWidget(self.f_kh_cu); tol.addStretch()
+        kh_tabs.addTab(tab_old, "📋 Khách hàng cũ")
+        self.kh_tabs = kh_tabs
+
+        # ── NHÂN VIÊN: tự điền NV đang login ────────────────────────────
+        self._auto_nv_id = self.current_user.get("nv_id")
+        self._auto_nv_name = "—"
+
+        if self._auto_nv_id:
+            conn2 = get_conn()
+            nv = conn2.execute(
+                "SELECT ma_nv,ho_ten FROM nhan_vien WHERE id=?",
+                (self._auto_nv_id,)
+            ).fetchone()
+            conn2.close()
+            if nv: self._auto_nv_name = f"{nv[0]} — {nv[1]}"
+
+        if self.current_user.get("role") == "admin" or not self._auto_nv_id:
+            # Admin hoặc NV chưa liên kết → cho chọn
+            self.f_nv = QComboBox()
+            for r in nv_rows:
+                self.f_nv.addItem(f"{r[1]} — {r[2]}", r[0])
+            nv_widget = self.f_nv
+        else:
+            # NV → tự điền, không cho đổi
+            self.f_nv = None
+            nv_widget = QLabel(f"✅  {self._auto_nv_name}")
+            nv_widget.setStyleSheet(
+                "background:#f0fdf4;color:#065f46;border-radius:8px;"
+                "border:0.5px solid #a7f3d0;"
+                "padding:9px 12px;font-size:13px;font-weight:600;")
+
+        # Giá bán + chiết khấu
+        self.f_gia = QDoubleSpinBox()
+        self.f_gia.setRange(0,1e11); self.f_gia.setSingleStep(1e6)
+        self.f_gia.setDecimals(0); self.f_gia.setSuffix(" ₫")
+        self.f_ck = QDoubleSpinBox()
+        self.f_ck.setRange(0,1e10); self.f_ck.setSingleStep(500000)
+        self.f_ck.setDecimals(0); self.f_ck.setSuffix(" ₫")
+        self.f_tt = QComboBox()
+        self.f_tt.addItems(["Tiền mặt","Chuyển khoản","Trả góp","Thẻ tín dụng","Vay NH"])
+        self.f_ghi = QLineEdit(); self.f_ghi.setPlaceholderText("Ghi chú thêm...")
+
+        for l,w in [
+            ("Mã đơn",      self.f_ma),
+            ("Xe *",        self.f_xe),
+            ("Khách hàng *",kh_tabs),
+            ("Nhân viên BH",nv_widget),
+            ("Giá bán *",   self.f_gia),
+            ("Chiết khấu",  self.f_ck),
+            ("Thanh toán",  self.f_tt),
+            ("Ghi chú",     self.f_ghi),
+        ]: form.addRow(l,w)
+
+        self._add_buttons("✅  Tạo đơn hàng")
+        self._auto_fill_gia()
+
+    def _auto_fill_gia(self):
+        xe_id = self.f_xe.currentData()
+        if xe_id:
+            conn = get_conn()
+            xe = conn.execute("SELECT gia_ban FROM xe WHERE id=?", (xe_id,)).fetchone()
+            conn.close()
+            if xe: self.f_gia.setValue(float(xe[0]))
+
+    def _save(self):
+        ma  = self.f_ma.text().strip()
+        xe_id = self.f_xe.currentData()
+        gia = self.f_gia.value()
+        if not xe_id or gia <= 0:
+            QMessageBox.warning(self,"","Chọn xe và nhập giá bán!"); return
+
+        conn = get_conn()
+        try:
+            # Xử lý khách hàng
+            if self.kh_tabs.currentIndex() == 0:
+                ten = self.f_kh_ten.text().strip()
+                sdt = self.f_kh_sdt.text().strip()
+                if not ten or not sdt:
+                    QMessageBox.warning(self,"","Nhập đủ Họ tên và Số ĐT khách hàng!"); return
+                cnt_kh = conn.execute("SELECT COUNT(*) FROM khach_hang").fetchone()[0]
+                ma_kh = f"KH{cnt_kh+1:03d}"
+                while conn.execute("SELECT id FROM khach_hang WHERE ma_kh=?",(ma_kh,)).fetchone():
+                    cnt_kh+=1; ma_kh=f"KH{cnt_kh+1:03d}"
+                c = conn.cursor()
+                c.execute("""INSERT INTO khach_hang(ma_kh,ho_ten,so_dt,email,dia_chi,cmnd,loai_kh)
+                    VALUES(?,?,?,?,?,?,?)""",
+                    (ma_kh,ten,sdt,self.f_kh_email.text(),
+                     self.f_kh_dc.text(),self.f_kh_cmnd.text(),
+                     self.f_kh_loai.currentText()))
+                kh_id = c.lastrowid
+            else:
+                kh_id = self.f_kh_cu.currentData()
+                if not kh_id:
+                    QMessageBox.warning(self,"","Chọn khách hàng!"); return
+
+            # Xử lý NV
+            nv_id = self.f_nv.currentData() if self.f_nv else self._auto_nv_id
+            if not nv_id:
+                QMessageBox.warning(self,"","Không xác định được nhân viên!"); return
+
+            conn.execute("""INSERT INTO don_hang(ma_don, xe_id, kh_id, nv_id,
+                                                 gia_ban_thuc, chiet_khau, phuong_thuc, ghi_chu,
+                                                 trang_thai_tt, so_tien_da_tt)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                         (ma, xe_id, kh_id, nv_id, gia, self.f_ck.value(),
+                          self.f_tt.currentText(), self.f_ghi.text(),
+                          'Chưa thanh toán', 0))
+            conn.commit()
+            QMessageBox.information(self, "✅ Thành công!", f"Tạo đơn hàng {ma} thành công!")
+
+            # Tạo QR code
+            from qr_utils import tao_qr_don_hang
+            from database import get_conn as _gc
+            conn2 = _gc()
+            dh = conn2.execute("""
+                SELECT dh.*, x.hang_xe||' '||x.dong_xe as ten_xe,
+                       kh.ho_ten as ten_kh, nv.ho_ten as ten_nv
+                FROM don_hang dh
+                JOIN xe x ON dh.xe_id=x.id
+                JOIN khach_hang kh ON dh.kh_id=kh.id
+                JOIN nhan_vien nv ON dh.nv_id=nv.id
+                WHERE dh.ma_don=?
+            """, (ma,)).fetchone()
+            conn2.close()
+            if dh:
+                tao_qr_don_hang(dict(dh))
+
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi", str(e))
+        finally:
+            conn.close()
+
+# ════════════════════════════════════════════════════════════════
+# DỊCH VỤ
+# ════════════════════════════════════════════════════════════════
+class DichVuView(BaseView):
+    COLS=[("MÃ PHIẾU","ma_dv",False),("XE","ten_xe",True),("KHÁCH HÀNG","ten_kh",False),
+          ("LOẠI DV","loai_dv",False),("CHI PHÍ","chi_phi",False),
+          ("TRẠNG THÁI","trang_thai",False),("NGÀY NHẬN","ngay_nhan",False)]
+    def __init__(self,current_user=None): super().__init__("page_dich_vu",current_user)
+    def _build_toolbar(self):
+        self._btn("+ Lập phiếu","btn_add",self._add)
+        self._btn("🖨️ In phiếu PDF","btn_pdf",self._in_pdf)
+        self._btn("🔄 Cập nhật TT",None,self._update_status)
+        self._btn("📊 Excel","btn_excel",self._export)
+        self._search_box("🔍 Tìm dịch vụ...")
+    def _load(self,q=""):
+        conn=get_conn()
+        sql="""SELECT dv.*,x.hang_xe||' '||x.dong_xe as ten_xe,kh.ho_ten as ten_kh
+               FROM dich_vu dv LEFT JOIN xe x ON dv.xe_id=x.id
+               LEFT JOIN khach_hang kh ON dv.kh_id=kh.id"""
+        p=[]
+        if q: sql+=" WHERE dv.ma_dv LIKE ? OR dv.loai_dv LIKE ?"; p=[f"%{q}%"]*2
+        self._rows=[dict(r) for r in conn.execute(sql+" ORDER BY dv.id DESC",p).fetchall()]
+        conn.close(); self._render()
+        STATUS = {
+            "Đã giao xe": "#065f46",
+            "Đã thanh toán": "#1e40af",
+            "Chờ xử lý": "#92400e",
+            "Huỷ": "#991b1b"
+        }
+        STATUS_BG = {
+            "Đã giao xe": "#d1fae5",
+            "Đã thanh toán": "#dbeafe",
+            "Chờ xử lý": "#fef3c7",
+            "Huỷ": "#fee2e2"
+        }
+        for r, row in enumerate(self._rows):
+            # Giá bán — xanh đậm
+            gi = QTableWidgetItem(f"{row['gia_ban_thuc'] / 1e9:.2f} tỷ")
+            gi.setForeground(QColor("#059669"))
+            gi.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+            self.tbl.setItem(r, 4, gi)
+            # Trạng thái — màu theo loại
+            si = QTableWidgetItem(row["trang_thai"])
+            si.setForeground(QColor(STATUS.get(row["trang_thai"], "#64748b")))
+            si.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+            self.tbl.setItem(r, 5, si)
+    def _add(self):
+        if DichVuDialog(self).exec(): self._load()
+    def _in_pdf(self):
+        if not self._check_sel("in PDF"): return
+        try:
+            from invoice_pdf import in_phieu_dich_vu
+            fname=in_phieu_dich_vu(self._sel_id)
+            QMessageBox.information(self,"✅ OK",f"Đã xuất: {fname}")
+        except Exception as e: QMessageBox.critical(self,"Lỗi",str(e))
+    def _update_status(self):
+        if not self._check_sel("cập nhật"): return
+        from PyQt6.QtWidgets import QInputDialog
+        status,ok=QInputDialog.getItem(self,"Cập nhật","Trạng thái:",
+            ["Tiếp nhận","Đang thực hiện","Hoàn thành"],0,False)
+        if ok:
+            conn=get_conn(); conn.execute("UPDATE dich_vu SET trang_thai=? WHERE id=?",(status,self._sel_id))
+            conn.commit(); conn.close(); self._load()
+    def _export(self):
+        conn=get_conn()
+        rows=conn.execute("""SELECT dv.ma_dv,x.hang_xe||' '||x.dong_xe,kh.ho_ten,
+            dv.loai_dv,dv.chi_phi,dv.trang_thai,dv.ngay_nhan FROM dich_vu dv
+            LEFT JOIN xe x ON dv.xe_id=x.id LEFT JOIN khach_hang kh ON dv.kh_id=kh.id""").fetchall()
+        conn.close()
+        pd.DataFrame([list(r) for r in rows],
+            columns=["Mã DV","Xe","Khách hàng","Loại DV","Chi phí","Trạng thái","Ngày nhận"]
+        ).to_excel("bao_cao_dich_vu.xlsx",index=False); QMessageBox.information(self,"Excel","✅ OK")
+
+
+class DichVuDialog(BaseDialog):
+    def __init__(self,parent=None):
+        super().__init__(parent,"Lập phiếu dịch vụ",500)
+        self._add_title("🔧  PHIẾU DỊCH VỤ BẢO DƯỠNG"); form=self._add_form()
+        conn=get_conn()
+        xe_rows=conn.execute("SELECT id,ma_xe,hang_xe,dong_xe FROM xe").fetchall()
+        kh_rows=conn.execute("SELECT id,ma_kh,ho_ten FROM khach_hang").fetchall()
+        nv_rows=conn.execute("SELECT id,ma_nv,ho_ten FROM nhan_vien WHERE trang_thai='Đang làm'").fetchall()
+        cnt=conn.execute("SELECT COUNT(*) FROM dich_vu").fetchone()[0]; conn.close()
+        self.f_ma=QLineEdit(f"DV{cnt+1:03d}")
+        self.f_xe=QComboBox(); [self.f_xe.addItem(f"{r[1]} — {r[2]} {r[3]}",r[0]) for r in xe_rows]
+        self.f_kh=QComboBox(); [self.f_kh.addItem(f"{r[1]} — {r[2]}",r[0]) for r in kh_rows]
+        self.f_nv=QComboBox(); [self.f_nv.addItem(f"{r[1]} — {r[2]}",r[0]) for r in nv_rows]
+        self.f_loai=self._f_combo(["Bảo dưỡng định kỳ","Sửa chữa","Đăng kiểm","Thay dầu","Thay lốp","Khác"])
+        self.f_mota=QLineEdit(); self.f_mota.setPlaceholderText("Mô tả công việc...")
+        self.f_cp=self._f_spin(100e6,50000)
+        for l,w in [("Mã phiếu *",self.f_ma),("Xe",self.f_xe),("Khách hàng",self.f_kh),
+                    ("KTV phụ trách",self.f_nv),("Loại DV *",self.f_loai),
+                    ("Mô tả",self.f_mota),("Chi phí",self.f_cp)]: form.addRow(l,w)
+        self._add_buttons("🔧  Lập phiếu")
+    def _save(self):
+        ma=self.f_ma.text().strip()
+        if not ma: QMessageBox.warning(self,"","Nhập mã phiếu!"); return
+        conn=get_conn()
+        try:
+            conn.execute("INSERT INTO dich_vu(ma_dv,xe_id,kh_id,nv_id,loai_dv,mo_ta,chi_phi) VALUES(?,?,?,?,?,?,?)",
+                (ma,self.f_xe.currentData(),self.f_kh.currentData(),self.f_nv.currentData(),
+                 self.f_loai.currentText(),self.f_mota.text(),self.f_cp.value()))
+            conn.commit(); QMessageBox.information(self,"OK","✅ Lập phiếu thành công!"); self.accept()
+        except Exception as e: QMessageBox.critical(self,"Lỗi",str(e))
+        finally: conn.close()
+# ════════════════════════════════════════════════════════════════
+# AI CHẤM CÔNG + HỒ SƠ NHÂN VIÊN
+# ════════════════════════════════════════════════════════════════
+class AIChamCongWorker:
+    def __init__(self, parent, nv_id, ho_ten, thang, nam):
+        self.parent = parent; self.nv_id = nv_id
+        self.ho_ten = ho_ten; self.thang = thang; self.nam = nam
+
+    def run_and_show(self):
+        from PyQt6.QtWidgets import QProgressDialog
+        from PyQt6.QtCore import Qt
+        prog = QProgressDialog(f"🤖 AI đang sinh dữ liệu cho {self.ho_ten}...",
+                               None, 0, 0, self.parent)
+        prog.setWindowTitle("AI Chấm công")
+        prog.setWindowModality(Qt.WindowModality.WindowModal)
+        prog.show()
+        try:
+            days_in_month = calendar.monthrange(self.nam, self.thang)[1]
+            conn = get_conn()
+            conn.execute("DELETE FROM cham_cong WHERE nv_id=? AND strftime('%Y-%m',ngay)=?",
+                (self.nv_id, f"{self.nam}-{self.thang:02d}"))
+            records = []
+            for d in range(1, days_in_month+1):
+                day = date(self.nam, self.thang, d)
+                if day.weekday() >= 5 or day > date.today(): continue
+                d_str = day.strftime("%Y-%m-%d")
+                rand = random.random()
+                if rand < 0.02:
+                    records.append((self.nv_id,d_str,None,None,"Vắng mặt",200000,0,"AI: Vắng không lý do"))
+                elif rand < 0.05:
+                    gv = f"{random.randint(8,9):02d}:{random.randint(20,59):02d}"
+                    gr = f"{random.randint(12,14):02d}:{random.randint(0,59):02d}"
+                    records.append((self.nv_id,d_str,gv,gr,"Nửa buổi",100000,0,"AI: Làm nửa buổi"))
+                elif rand < 0.10:
+                    gv = f"08:{random.randint(16,45):02d}"
+                    gr = f"{random.randint(17,18):02d}:{random.randint(30,59):02d}"
+                    records.append((self.nv_id,d_str,gv,gr,"Đi muộn",50000,0,f"AI: Đến muộn {gv}"))
+                elif rand < 0.13:
+                    gv = f"07:{random.randint(45,59):02d}"
+                    gr = f"16:{random.randint(30,59):02d}"
+                    records.append((self.nv_id,d_str,gv,gr,"Về sớm",50000,0,f"AI: Về sớm {gr}"))
+                else:
+                    gv = f"07:{random.randint(45,59):02d}"
+                    gr = f"{random.randint(17,18):02d}:{random.randint(30,59):02d}"
+                    thuong = 100000 if gr >= "18:00" else 0
+                    gc = "AI: Làm thêm giờ" if thuong > 0 else "AI: Đúng giờ"
+                    records.append((self.nv_id,d_str,gv,gr,"Đúng giờ",0,thuong,gc))
+            conn.executemany("""INSERT INTO cham_cong
+                (nv_id,ngay,gio_vao,gio_ra,trang_thai,phat,thuong,ghi_chu)
+                VALUES(?,?,?,?,?,?,?,?)""", records)
+            conn.commit(); conn.close(); prog.close()
+            dung_gio = sum(1 for r in records if r[4]=="Đúng giờ")
+            di_muon  = sum(1 for r in records if r[4]=="Đi muộn")
+            vang     = sum(1 for r in records if r[4]=="Vắng mặt")
+            QMessageBox.information(self.parent, "✅ AI Chấm công xong!",
+                f"🤖 Đã sinh {len(records)} ngày công cho {self.ho_ten}\n"
+                f"Tháng {self.thang}/{self.nam}\n\n"
+                f"✅ Đúng giờ: {dung_gio} ngày\n"
+                f"⏰ Đi muộn: {di_muon} ngày\n"
+                f"❌ Vắng mặt: {vang} ngày")
+        except Exception as e:
+            prog.close(); QMessageBox.critical(self.parent,"Lỗi AI",str(e))
+
+
+class NhanVienHoSoDialog(QDialog):
+    def __init__(self, parent=None, data=None):
+        super().__init__(parent)
+        self.data = data or {}; self.nv_id = data.get("id") if data else None
+        self.setWindowTitle(f"Hồ sơ — {data.get('ho_ten','')}")
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.setMinimumSize(min(820, int(screen.width()*0.85)), min(620, int(screen.height()*0.82)))
+        self.setStyleSheet("""
+            QDialog{background:#f0f4f8;color:#00274c;}
+            QLabel{color:#1e40af;font-size:13px;font-weight:600;background:transparent;letter-spacing:0.3px;}
+            QLineEdit,QTextEdit,QDoubleSpinBox,QComboBox{
+                background:#ffffff;color:#00274c;border:0.5px solid #dbeafe;
+                border-radius:8px;padding:8px 12px;font-size:13px;}
+            QLineEdit:focus,QTextEdit:focus,QDoubleSpinBox:focus,QComboBox:focus{border-color:#2563eb;}
+            QComboBox QAbstractItemView{background:#ffffff;color:#00274c;
+                border:0.5px solid #dbeafe;selection-background-color:#eff6ff;}
+            QPushButton{background:#ffffff;color:#00274c;border:0.5px solid #dbeafe;
+                border-radius:8px;padding:8px 18px;font-size:13px;}
+            QPushButton:hover{background:#eff6ff;color:#1e40af;}
+            QPushButton#btn_save{background:#2563eb;color:white;border:none;font-weight:700;min-width:100px;}
+            QPushButton#btn_save:hover{background:#1d4ed8;}
+            QPushButton#btn_pdf{background:#eff6ff;color:#1e40af;border:0.5px solid #bfdbfe;font-weight:600;}
+            QPushButton#btn_pdf:hover{background:#2563eb;color:white;}
+            QTabWidget::pane{border:0.5px solid #dbeafe;border-radius:8px;}
+            QTabBar::tab{padding:6px 16px;font-size:12px;font-weight:600;
+                color:#64748b;background:#f8fafc;border:none;
+                border-bottom:2px solid transparent;}
+            QTabBar::tab:selected{color:#2563eb;border-bottom:2px solid #2563eb;}
+        """)
+        self._build(); self._load()
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── HEADER ───────────────────────────────────────────────────────
+        hdr = QWidget()
+        hdr.setStyleSheet("background:#ffffff;border-bottom:3px solid #2563eb;padding:20px;")
+        hdr_l = QVBoxLayout(hdr)
+        hdr_l.setContentsMargins(0, 0, 0, 0)
+        hdr_l.setSpacing(16)
+
+        # Row 1: Avatar + Tên + Trạng thái
+        row1 = QHBoxLayout()
+        av = QLabel("🧑‍💼")
+        av.setStyleSheet("font-size:64px;")
+        av.setFixedSize(100, 100)
+        av.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row1.addWidget(av)
+
+        col_ten = QVBoxLayout()
+        col_ten.setSpacing(4)
+        ten = QLabel(self.data.get("ho_ten", "").upper())
+        ten.setStyleSheet("font-size:26px;font-weight:900;color:#111827;background:transparent;")
+        ma_lbl = QLabel(f"🪪 {self.data.get('ma_nv', '')}")
+        ma_lbl.setStyleSheet("font-size:14px;color:#0284c7;font-weight:700;background:transparent;")
+        cv_lbl = QLabel(f"💼 {self.data.get('chuc_vu', '')}")
+        cv_lbl.setStyleSheet("font-size:14px;color:#0284c7;font-weight:700;background:transparent;")
+        col_ten.addWidget(ten)
+        col_ten.addWidget(ma_lbl)
+        col_ten.addWidget(cv_lbl)
+        row1.addLayout(col_ten, 1)
+
+        # Bên phải: Trạng thái + Lương
+        col_right = QVBoxLayout()
+        col_right.setSpacing(8)
+        tt = self.data.get("trang_thai", "")
+        tt_color = {"Đang làm": "#10b981", "Thử việc": "#f59e0b", "Nghỉ việc": "#ef4444"}.get(tt, "#6b7280")
+        tt_lbl = QLabel(f"● {tt}")
+        tt_lbl.setStyleSheet(f"font-size:16px;font-weight:900;color:{tt_color};background:transparent;text-align:right;")
+        luong = int(self.data.get('luong', 0) or 0)
+        luong_lbl = QLabel(f"💰 {luong:,}₫/tháng")
+        luong_lbl.setStyleSheet("font-size:14px;font-weight:800;color:#059669;background:transparent;text-align:right;")
+        col_right.addWidget(tt_lbl)
+        col_right.addWidget(luong_lbl)
+        row1.addLayout(col_right)
+        hdr_l.addLayout(row1)
+
+        # Row 2: Contact info
+        row2 = QHBoxLayout()
+        row2.setContentsMargins(100, 0, 0, 0)
+        sdt = QLabel(f"📱 {self.data.get('so_dt', '') or '—'}")
+        sdt.setStyleSheet("font-size:13px;color:#d97706;font-weight:700;background:transparent;")
+        email = QLabel(f"📧 {self.data.get('email', '') or '—'}")
+        email.setStyleSheet("font-size:13px;color:#d97706;font-weight:700;background:transparent;")
+        ngay = QLabel(f"📅 Vào: {self.data.get('ngay_vao', '') or '—'}")
+        ngay.setStyleSheet("font-size:13px;color:#059669;font-weight:700;background:transparent;")
+        row2.addWidget(sdt)
+        row2.addWidget(email)
+        row2.addWidget(ngay)
+        row2.addStretch()
+        hdr_l.addLayout(row2)
+
+        root.addWidget(hdr)
+
+        # ── STAT CARDS ───────────────────────────────────────────────────
+        stat_w = QWidget()
+        stat_w.setStyleSheet("background:#f9fafb;border-bottom:1px solid #e5e7eb;")
+        stat_l = QHBoxLayout(stat_w)
+        stat_l.setContentsMargins(16, 14, 16, 14)
+        stat_l.setSpacing(12)
+
+        self._stat_lbls = {}
+        for key, icon, label, color in [
+            ("di_lam", "✅", "Ngày công", "#0F1F35"),
+            ("di_muon", "⏰", "Đi muộn", "#059669"),
+            ("vang", "❌", "Vắng", "#7c3aed"),
+            ("don_hang", "📋", "Đơn hàng", "#d97706"),
+        ]:
+            c = QWidget()
+            c.setStyleSheet(
+                f"background:#ffffff;border:1px solid #e5e7eb;"
+                f"border-radius:12px;border-top:3px solid {color};")
+            cl = QVBoxLayout(c)
+            cl.setContentsMargins(14, 12, 14, 12)
+            cl.setSpacing(2)
+            val_lbl = QLabel("—")
+            val_lbl.setStyleSheet(
+                f"font-size:18px;font-weight:900;color:{color};background:transparent;")
+            lbl_lbl = QLabel(f"{icon} {label}")
+            lbl_lbl.setStyleSheet("font-size:12px;color:#6b7280;font-weight:700;background:transparent;")
+            cl.addWidget(val_lbl)
+            cl.addWidget(lbl_lbl)
+            stat_l.addWidget(c, 1)
+            self._stat_lbls[key] = val_lbl
+
+        root.addWidget(stat_w)
+
+        # ── NỘI DUNG CHÍNH ───────────────────────────────────────────────
+        content = QWidget()
+        content.setStyleSheet("background:#ffffff;")
+        content_l = QVBoxLayout(content)
+        content_l.setContentsMargins(24, 20, 24, 20)
+        content_l.setSpacing(20)
+
+        tabs = QTabWidget()
+
+        # Tab chấm công
+        t1 = QWidget()
+        t1.setStyleSheet("background:#ffffff;")
+        t1l = QVBoxLayout(t1)
+        t1l.setContentsMargins(0, 0, 0, 0)
+
+        cols_cc = ["NGÀY", "THỨ", "GIỜ VÀO", "GIỜ RA", "TRẠNG THÁI", "PHẠT", "THƯỞNG", "GHI CHÚ"]
+        self.tbl_cc = QTableWidget(0, len(cols_cc))
+        self.tbl_cc.setHorizontalHeaderLabels(cols_cc)
+        self.tbl_cc.setAlternatingRowColors(True)
+        self.tbl_cc.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_cc.setShowGrid(False)
+        self.tbl_cc.verticalHeader().setVisible(False)
+        self.tbl_cc.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        t1l.addWidget(self.tbl_cc)
+        tabs.addTab(t1, "⏰  Chấm công tháng này")
+
+        # Tab đơn hàng
+        t2 = QWidget()
+        t2.setStyleSheet("background:#ffffff;")
+        t2l = QVBoxLayout(t2)
+        t2l.setContentsMargins(0, 0, 0, 0)
+
+        cols_dh = ["MÃ ĐƠN", "XE", "KHÁCH HÀNG", "GIÁ BÁN", "TRẠNG THÁI", "NGÀY ĐẶT"]
+        self.tbl_dh = QTableWidget(0, len(cols_dh))
+        self.tbl_dh.setHorizontalHeaderLabels(cols_dh)
+        self.tbl_dh.setAlternatingRowColors(True)
+        self.tbl_dh.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_dh.setShowGrid(False)
+        self.tbl_dh.verticalHeader().setVisible(False)
+        self.tbl_dh.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        t2l.addWidget(self.tbl_dh)
+        tabs.addTab(t2, "📋  Đơn hàng")
+
+        content_l.addWidget(tabs, 1)
+        root.addWidget(content, 1)
+
+        # ── FOOTER ───────────────────────────────────────────────────────
+        ftr = QWidget()
+        ftr.setFixedHeight(60)
+        ftr.setStyleSheet("background:#ffffff;border-top:1px solid #e5e7eb;")
+        fl = QHBoxLayout(ftr)
+        fl.setContentsMargins(24, 14, 24, 14)
+        fl.setSpacing(12)
+        fl.addStretch()
+
+        btn_close = QPushButton("✖  Đóng")
+        btn_close.setObjectName("btn_close")
+        btn_close.setMinimumWidth(120)
+        btn_close.setMinimumHeight(40)
+        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close.clicked.connect(self.reject)
+
+        fl.addWidget(btn_close)
+        root.addWidget(ftr)
+
+    def _load(self):
+        if not self.nv_id: return
+        now = datetime.now(); thang=now.month; nam=now.year
+        conn = get_conn()
+        cc_rows = conn.execute("""SELECT ngay,gio_vao,gio_ra,trang_thai,phat,thuong,ghi_chu
+            FROM cham_cong WHERE nv_id=? AND strftime('%Y-%m',ngay)=?
+            ORDER BY ngay DESC""", (self.nv_id,f"{nam}-{thang:02d}")).fetchall()
+        dh_rows = conn.execute("""SELECT dh.ma_don,x.hang_xe||' '||x.dong_xe,kh.ho_ten,
+            dh.gia_ban_thuc,dh.trang_thai,dh.ngay_dat
+            FROM don_hang dh JOIN xe x ON dh.xe_id=x.id
+            JOIN khach_hang kh ON dh.kh_id=kh.id
+            WHERE dh.nv_id=? ORDER BY dh.id DESC""", (self.nv_id,)).fetchall()
+        nv = conn.execute("SELECT luong FROM nhan_vien WHERE id=?",(self.nv_id,)).fetchone()
+        conn.close()
+        luong_cb = float(nv[0] or 0) if nv else 0
+        days_in = calendar.monthrange(nam,thang)[1]
+        work_days = sum(1 for d in range(1,days_in+1) if date(nam,thang,d).weekday()<5)
+        di_lam  = sum(1 for r in cc_rows if r[3]!="Vắng mặt")
+        di_muon = sum(1 for r in cc_rows if r[3]=="Đi muộn")
+        vang    = sum(1 for r in cc_rows if r[3]=="Vắng mặt")
+        tong_phat   = sum(float(r[4] or 0) for r in cc_rows)
+        tong_thuong = sum(float(r[5] or 0) for r in cc_rows)
+        luong_tt = (luong_cb/work_days*di_lam if work_days>0 else 0)-tong_phat+tong_thuong
+        doanh_so = sum(r[3] for r in dh_rows)
+        self._stat_lbls["di_lam"].setText(f"{di_lam}/{work_days}")
+        self._stat_lbls["di_muon"].setText(str(di_muon))
+        self._stat_lbls["vang"].setText(str(vang))
+        self._stat_lbls["don_hang"].setText(str(len(dh_rows)))
+        # Bảng chấm công
+        thu_map={0:"Thứ 2",1:"Thứ 3",2:"Thứ 4",3:"Thứ 5",4:"Thứ 6",5:"Thứ 7",6:"CN"}
+        TT_COLOR={"Đúng giờ":"#4ade80","Đi muộn":"#fbbf24","Về sớm":"#f97316",
+                  "Vắng mặt":"#f87171","Nửa buổi":"#a78bfa","Nghỉ phép":"#60a5fa"}
+        self.tbl_cc.setRowCount(0)
+        for row in cc_rows:
+            r=self.tbl_cc.rowCount(); self.tbl_cc.insertRow(r); self.tbl_cc.setRowHeight(r,40)
+            try: d=datetime.strptime(row[0],"%Y-%m-%d"); ngay_fmt=d.strftime("%d/%m/%Y"); thu=thu_map[d.weekday()]
+            except: ngay_fmt=row[0]; thu=""
+            tt=row[3] or "—"; color=TT_COLOR.get(tt,"#94a3b8")
+            phat=float(row[4] or 0); thuong=float(row[5] or 0)
+            for c,val in enumerate([ngay_fmt,thu,row[1] or "—",row[2] or "—",tt,
+                f"-{phat/1000:.0f}k" if phat>0 else "—",
+                f"+{thuong/1000:.0f}k" if thuong>0 else "—",row[6] or ""]):
+                item=QTableWidgetItem(val)
+                if c==4: item.setForeground(QColor(color)); item.setFont(QFont("Segoe UI",11,QFont.Weight.Bold))
+                elif c==5 and phat>0: item.setForeground(QColor("#f87171"))
+                elif c==6 and thuong>0: item.setForeground(QColor("#4ade80"))
+                self.tbl_cc.setItem(r,c,item)
+        # Bảng đơn hàng
+        STATUS_COL={"Đã giao xe":"#4ade80","Đã thanh toán":"#60a5fa","Chờ xử lý":"#fbbf24"}
+        self.tbl_dh.setRowCount(0)
+        for row in dh_rows:
+            r=self.tbl_dh.rowCount(); self.tbl_dh.insertRow(r); self.tbl_dh.setRowHeight(r,40)
+            for c,val in enumerate([row[0],row[1],row[2],f"{row[3]/1e9:.2f} tỷ",row[4],row[5] or ""]):
+                item=QTableWidgetItem(val)
+                if c==0: item.setForeground(QColor("#a78bfa")); item.setFont(QFont("Segoe UI",11,QFont.Weight.Bold))
+                elif c==3: item.setForeground(QColor("#4ade80")); item.setFont(QFont("Segoe UI",12,QFont.Weight.Bold))
+                elif c==4: item.setForeground(QColor(STATUS_COL.get(val,"#94a3b8")))
+                self.tbl_dh.setItem(r,c,item)

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>NhanVienDialog</class>
+ <widget class="QDialog" name="NhanVienDialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>460</width><height>390</height></rect></property>
+  <property name="windowTitle"><string>Thêm / Sửa nhân viên</string></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="contentsMargins"><rect><left>24</left><top>20</top><right>24</right><bottom>20</bottom></rect></property>
+   <property name="spacing"><number>12</number></property>
+   <item><widget class="QLabel" name="lbl_title"><property name="text"><string>THÔNG TIN NHÂN VIÊN</string></property><property name="objectName"><string>detail_key_form</string></property></widget></item>
+   <item>
+    <layout class="QFormLayout" name="formLayout">
+     <property name="labelAlignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
+     <property name="horizontalSpacing"><number>14</number></property><property name="verticalSpacing"><number>10</number></property>
+     <item row="0" column="0"><widget class="QLabel"><property name="text"><string>Mã NV *</string></property></widget></item>
+     <item row="0" column="1"><widget class="QLineEdit" name="txt_ma_nv"><property name="placeholderText"><string>VD: NV006</string></property></widget></item>
+     <item row="1" column="0"><widget class="QLabel"><property name="text"><string>Họ tên *</string></property></widget></item>
+     <item row="1" column="1"><widget class="QLineEdit" name="txt_ho_ten"><property name="placeholderText"><string>Họ và tên đầy đủ</string></property></widget></item>
+     <item row="2" column="0"><widget class="QLabel"><property name="text"><string>Chức vụ *</string></property></widget></item>
+     <item row="2" column="1"><widget class="QComboBox" name="cbo_chuc_vu"><item><property name="text"><string>Giám đốc</string></property></item><item><property name="text"><string>Quản lý BH</string></property></item><item><property name="text"><string>Nhân viên BH</string></property></item><item><property name="text"><string>Kỹ thuật viên</string></property></item><item><property name="text"><string>Kế toán</string></property></item></widget></item>
+     <item row="3" column="0"><widget class="QLabel"><property name="text"><string>Số điện thoại</string></property></widget></item>
+     <item row="3" column="1"><widget class="QLineEdit" name="txt_so_dt"><property name="placeholderText"><string>0912 345 678</string></property></widget></item>
+     <item row="4" column="0"><widget class="QLabel"><property name="text"><string>Email</string></property></widget></item>
+     <item row="4" column="1"><widget class="QLineEdit" name="txt_email"><property name="placeholderText"><string>nhanvien@auto.vn</string></property></widget></item>
+     <item row="5" column="0"><widget class="QLabel"><property name="text"><string>Ngày vào làm</string></property></widget></item>
+     <item row="5" column="1"><widget class="QLineEdit" name="txt_ngay_vao"><property name="placeholderText"><string>YYYY-MM-DD</string></property></widget></item>
+     <item row="6" column="0"><widget class="QLabel"><property name="text"><string>Lương cơ bản</string></property></widget></item>
+    <item row="6" column="1"><widget class="QDoubleSpinBox" name="spin_luong"><property name="maximum"><double>200000000.000000000000000</double></property><property name="singleStep"><double>500000.000000000000000</double></property><property name="decimals"><number>0</number></property><property name="suffix"><string> ₫</string></property></widget></item>
+     <item row="7" column="0"><widget class="QLabel"><property name="text"><string>Trạng thái</string></property></widget></item>
+     <item row="7" column="1"><widget class="QComboBox" name="cbo_trang_thai"><item><property name="text"><string>Đang làm</string></property></item><item><property name="text"><string>Thử việc</string></property></item><item><property name="text"><string>Nghỉ việc</string></property></item></widget></item>
+    </layout>
+   </item>
+   <item>
+    <layout class="QHBoxLayout">
+     <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+     <item><widget class="QPushButton" name="btn_cancel"><property name="text"><string>Huỷ bỏ</string></property></widget></item>
+     <item><widget class="QPushButton" name="btn_save"><property name="text"><string>💾  Lưu NV</string></property><property name="objectName"><string>btn_add</string></property><property name="default"><bool>true</bool></property></widget></item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections><connection><sender>btn_cancel</sender><signal>clicked()</signal><receiver>NhanVienDialog</receiver><slot>reject()</slot><hints><hint type="sourcelabel"><x>20</x><y>20</y></hint><hint type="destinationlabel"><x>20</x><y>20</y></hint></hints></connection></connections>
+</ui>

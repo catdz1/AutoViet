@@ -1,0 +1,108 @@
+# ════════════════════════════════════════════════════════════════
+# DỊCH VỤ
+# ════════════════════════════════════════════════════════════════
+class DichVuView(BaseView):
+    COLS=[("MÃ PHIẾU","ma_dv",False),("XE","ten_xe",True),("KHÁCH HÀNG","ten_kh",False),
+          ("LOẠI DV","loai_dv",False),("CHI PHÍ","chi_phi",False),
+          ("TRẠNG THÁI","trang_thai",False),("NGÀY NHẬN","ngay_nhan",False)]
+    def __init__(self,current_user=None): super().__init__("page_dich_vu",current_user)
+    def _build_toolbar(self):
+        self._btn("+ Lập phiếu","btn_add",self._add)
+        self._btn("🖨️ In phiếu PDF","btn_pdf",self._in_pdf)
+        self._btn("🔄 Cập nhật TT",None,self._update_status)
+        self._btn("📊 Excel","btn_excel",self._export)
+        self._search_box("🔍 Tìm dịch vụ...")
+    def _load(self,q=""):
+        conn=get_conn()
+        sql="""SELECT dv.*,x.hang_xe||' '||x.dong_xe as ten_xe,kh.ho_ten as ten_kh
+               FROM dich_vu dv LEFT JOIN xe x ON dv.xe_id=x.id
+               LEFT JOIN khach_hang kh ON dv.kh_id=kh.id"""
+        p=[]
+        if q: sql+=" WHERE dv.ma_dv LIKE ? OR dv.loai_dv LIKE ?"; p=[f"%{q}%"]*2
+        self._rows=[dict(r) for r in conn.execute(sql+" ORDER BY dv.id DESC",p).fetchall()]
+        conn.close(); self._render()
+        STATUS = {
+            "Đã giao xe": "#065f46",
+            "Đã thanh toán": "#1e40af",
+            "Chờ xử lý": "#92400e",
+            "Huỷ": "#991b1b"
+        }
+        STATUS_BG = {
+            "Đã giao xe": "#d1fae5",
+            "Đã thanh toán": "#dbeafe",
+            "Chờ xử lý": "#fef3c7",
+            "Huỷ": "#fee2e2"
+        }
+        for r, row in enumerate(self._rows):
+            # Giá bán — xanh đậm
+            gi = QTableWidgetItem(f"{row['gia_ban_thuc'] / 1e9:.2f} tỷ")
+            gi.setForeground(QColor("#059669"))
+            gi.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+            self.tbl.setItem(r, 4, gi)
+            # Trạng thái — màu theo loại
+            si = QTableWidgetItem(row["trang_thai"])
+            si.setForeground(QColor(STATUS.get(row["trang_thai"], "#64748b")))
+            si.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+            self.tbl.setItem(r, 5, si)
+    def _add(self):
+        if DichVuDialog(self).exec(): self._load()
+    def _in_pdf(self):
+        if not self._check_sel("in PDF"): return
+        try:
+            from invoice_pdf import in_phieu_dich_vu
+            fname=in_phieu_dich_vu(self._sel_id)
+            QMessageBox.information(self,"✅ OK",f"Đã xuất: {fname}")
+        except Exception as e: QMessageBox.critical(self,"Lỗi",str(e))
+    def _update_status(self):
+        if not self._check_sel("cập nhật"): return
+        from PyQt6.QtWidgets import QInputDialog
+        status,ok=QInputDialog.getItem(self,"Cập nhật","Trạng thái:",
+            ["Tiếp nhận","Đang thực hiện","Hoàn thành"],0,False)
+        if ok:
+            conn=get_conn(); conn.execute("UPDATE dich_vu SET trang_thai=? WHERE id=?",(status,self._sel_id))
+            conn.commit(); conn.close(); self._load()
+    def _export(self):
+        conn=get_conn()
+        rows=conn.execute("""SELECT dv.ma_dv,x.hang_xe||' '||x.dong_xe,kh.ho_ten,
+            dv.loai_dv,dv.chi_phi,dv.trang_thai,dv.ngay_nhan FROM dich_vu dv
+            LEFT JOIN xe x ON dv.xe_id=x.id LEFT JOIN khach_hang kh ON dv.kh_id=kh.id""").fetchall()
+        conn.close()
+        pd.DataFrame([list(r) for r in rows],
+            columns=["Mã DV","Xe","Khách hàng","Loại DV","Chi phí","Trạng thái","Ngày nhận"]
+        ).to_excel("bao_cao_dich_vu.xlsx",index=False); QMessageBox.information(self,"Excel","✅ OK")
+
+
+class DichVuDialog(BaseDialog):
+    def __init__(self,parent=None):
+        super().__init__(parent,"Lập phiếu dịch vụ",500)
+        self._add_title("🔧  PHIẾU DỊCH VỤ BẢO DƯỠNG"); form=self._add_form()
+        conn=get_conn()
+        xe_rows=conn.execute("SELECT id,ma_xe,hang_xe,dong_xe FROM xe").fetchall()
+        kh_rows=conn.execute("SELECT id,ma_kh,ho_ten FROM khach_hang").fetchall()
+        nv_rows=conn.execute("SELECT id,ma_nv,ho_ten FROM nhan_vien WHERE trang_thai='Đang làm'").fetchall()
+        cnt=conn.execute("SELECT COUNT(*) FROM dich_vu").fetchone()[0]; conn.close()
+        self.f_ma=QLineEdit(f"DV{cnt+1:03d}")
+        self.f_xe=QComboBox(); [self.f_xe.addItem(f"{r[1]} — {r[2]} {r[3]}",r[0]) for r in xe_rows]
+        self.f_kh=QComboBox(); [self.f_kh.addItem(f"{r[1]} — {r[2]}",r[0]) for r in kh_rows]
+        self.f_nv=QComboBox(); [self.f_nv.addItem(f"{r[1]} — {r[2]}",r[0]) for r in nv_rows]
+        self.f_loai=self._f_combo(["Bảo dưỡng định kỳ","Sửa chữa","Đăng kiểm","Thay dầu","Thay lốp","Khác"])
+        self.f_mota=QLineEdit(); self.f_mota.setPlaceholderText("Mô tả công việc...")
+        self.f_cp=self._f_spin(100e6,50000)
+        for l,w in [("Mã phiếu *",self.f_ma),("Xe",self.f_xe),("Khách hàng",self.f_kh),
+                    ("KTV phụ trách",self.f_nv),("Loại DV *",self.f_loai),
+                    ("Mô tả",self.f_mota),("Chi phí",self.f_cp)]: form.addRow(l,w)
+        self._add_buttons("🔧  Lập phiếu")
+    def _save(self):
+        ma=self.f_ma.text().strip()
+        if not ma: QMessageBox.warning(self,"","Nhập mã phiếu!"); return
+        conn=get_conn()
+        try:
+            conn.execute("INSERT INTO dich_vu(ma_dv,xe_id,kh_id,nv_id,loai_dv,mo_ta,chi_phi) VALUES(?,?,?,?,?,?,?)",
+                (ma,self.f_xe.currentData(),self.f_kh.currentData(),self.f_nv.currentData(),
+                 self.f_loai.currentText(),self.f_mota.text(),self.f_cp.value()))
+            conn.commit(); QMessageBox.information(self,"OK","✅ Lập phiếu thành công!"); self.accept()
+        except Exception as e: QMessageBox.critical(self,"Lỗi",str(e))
+        finally: conn.close()
+# ════════════════════════════════════════════════════════════════
+# AI CHẤM CÔNG + HỒ SƠ NHÂN VIÊN
+# ════════════════════════════════════════════════════════════════

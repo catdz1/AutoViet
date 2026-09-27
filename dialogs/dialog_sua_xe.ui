@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DialogSuaXe</class>
+ <widget class="QDialog" name="DialogSuaXe">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>560</width><height>680</height></rect>
+  </property>
+  <property name="windowTitle"><string>Sửa thông tin xe</string></property>
+  <property name="styleSheet">
+   <string notr="true">
+QDialog { background-color: #1a1a2e; color: #ffffff; }
+QLabel { color: #a0a8c0; font-size: 13px; }
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
+    background-color: #16213e; border: 1px solid #2a2a4a;
+    border-radius: 8px; color: #ffffff; padding: 8px 12px;
+    font-size: 13px; min-height: 36px;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
+QDoubleSpinBox:focus, QTextEdit:focus {
+    border: 1px solid #059669; background-color: #1e1e3f;
+}
+QLineEdit:read-only { background:#0f0f23; color:#6c7293; border:1px solid #1a1a3a; }
+QComboBox::drop-down { border: none; }
+QComboBox QAbstractItemView {
+    background-color: #16213e; color: #ffffff;
+    selection-background-color: #059669;
+}
+QPushButton#btnCapNhat {
+    background-color: #059669; color: white; border: none;
+    border-radius: 8px; padding: 10px 24px;
+    font-size: 14px; font-weight: bold;
+}
+QPushButton#btnCapNhat:hover { background-color: #047857; }
+QPushButton#btnHuy {
+    background-color: transparent; color: #a0a8c0;
+    border: 1px solid #2a2a4a; border-radius: 8px;
+    padding: 10px 24px; font-size: 14px;
+}
+QPushButton#btnHuy:hover { background-color: #2a2a4a; color: #ffffff; }
+QFrame#frameHeader { background-color: #16213e; }
+   </string>
+  </property>
+
+  <layout class="QVBoxLayout" name="mainLayout">
+   <property name="spacing"><number>0</number></property>
+   <property name="leftMargin"><number>0</number></property>
+   <property name="topMargin"><number>0</number></property>
+   <property name="rightMargin"><number>0</number></property>
+   <property name="bottomMargin"><number>0</number></property>
+
+   <!-- HEADER -->
+   <item>
+    <widget class="QFrame" name="frameHeader">
+     <property name="minimumHeight"><number>72</number></property>
+     <layout class="QHBoxLayout">
+      <property name="leftMargin"><number>24</number></property>
+      <property name="topMargin"><number>16</number></property>
+      <property name="rightMargin"><number>24</number></property>
+      <property name="bottomMargin"><number>16</number></property>
+      <item>
+       <widget class="QLabel" name="lblIcon">
+        <property name="text"><string>✏️</string></property>
+        <property name="styleSheet"><string>font-size:26px;</string></property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QVBoxLayout">
+        <property name="spacing"><number>2</number></property>
+        <item>
+         <widget class="QLabel" name="lblTitle">
+          <property name="text"><string>Chỉnh sửa thông tin xe</string></property>
+          <property name="styleSheet"><string>color:#ffffff; font-size:17px; font-weight:bold;</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="lblSub">
+          <property name="text"><string>Cập nhật thông tin xe trong hệ thống</string></property>
+          <property name="styleSheet"><string>color:#6c7293; font-size:12px;</string></property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer>
+      </item>
+      <item>
+       <widget class="QPushButton" name="btnClose">
+        <property name="text"><string>✕</string></property>
+        <property name="fixedWidth"><number>32</number></property>
+        <property name="fixedHeight"><number>32</number></property>
+        <property name="styleSheet">
+         <string>QPushButton{background:#2a2a4a;border:none;border-radius:16px;color:#a0a8c0;}
+QPushButton:hover{background:#e53e3e;color:white;}</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <item>
+    <widget class="QFrame" name="divider1">
+     <property name="maximumHeight"><number>1</number></property>
+     <property name="styleSheet"><string>background:#2a2a4a;</string></property>
+    </widget>
+   </item>
+
+   <!-- FORM -->
+   <item>
+    <layout class="QVBoxLayout" name="formLayout">
+     <property name="leftMargin"><number>24</number></property>
+     <property name="topMargin"><number>18</number></property>
+     <property name="rightMargin"><number>24</number></property>
+     <property name="bottomMargin"><number>10</number></property>
+     <property name="spacing"><number>8</number></property>
+
+     <item><widget class="QLabel"><property name="text"><string>Mã xe</string></property></widget></item>
+     <item>
+      <widget class="QLineEdit" name="txtMaXe">
+       <property name="readOnly"><bool>true</bool></property>
+      </widget>
+     </item>
+
+     <item><widget class="QLabel"><property name="text"><string>Tên xe *</string></property></widget></item>
+     <item><widget class="QLineEdit" name="txtTenXe"/></item>
+
+     <item>
+      <layout class="QHBoxLayout">
+       <property name="spacing"><number>12</number></property>
+       <item>
+        <layout class="QVBoxLayout">
+         <item><widget class="QLabel"><property name="text"><string>Hãng xe *</string></property></widget></item>
+         <item>
+          <widget class="QComboBox" name="cmbHang">
+           <item><property name="text"><string>Toyota</string></property></item>
+           <item><property name="text"><string>Honda</string></property></item>
+           <item><property name="text"><string>Ford</string></property></item>
+           <item><property name="text"><string>Mazda</string></property></item>
+           <item><property name="text"><string>Hyundai</string></property></item>
+           <item><property name="text"><string>Kia</string></property></item>
+           <item><property name="text"><string>Mitsubishi</string></property></item>
+           <item><property name="text"><string>Suzuki</string></property></item>
+           <item><property name="text"><string>Khác</string></property></item>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QVBoxLayout">
+         <item><widget class="QLabel"><property name="text"><string>Dòng xe</string></property></widget></item>
+         <item><widget class="QLineEdit" name="txtDongXe"/></item>
+        </layout>
+       </item>
+      </layout>
+     </item>
+
+     <item>
+      <layout class="QHBoxLayout">
+       <property name="spacing"><number>12</number></property>
+       <item>
+        <layout class="QVBoxLayout">
+         <item><widget class="QLabel"><property name="text"><string>Năm SX *</string></property></widget></item>
+         <item>
+          <widget class="QSpinBox" name="spnNamSX">
+           <property name="minimum"><number>2000</number></property>
+           <property name="maximum"><number>2030</number></property>
+           <property name="value"><number>2024</number></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QVBoxLayout">
+         <item><widget class="QLabel"><property name="text"><string>Màu sắc</string></property></widget></item>
+         <item><widget class="QLineEdit" name="txtMauSac"/></item>
+        </layout>
+       </item>
+      </layout>
+     </item>
+
+     <item>
+      <layout class="QHBoxLayout">
+       <property name="spacing"><number>12</number></property>
+       <item>
+        <layout class="QVBoxLayout">
+         <item><widget class="QLabel"><property name="text"><string>Giá nhập (tỷ)</string></property></widget></item>
+         <item>
+          <widget class="QDoubleSpinBox" name="spnGiaNhap">
+           <property name="decimals"><number>3</number></property>
+           <property name="maximum"><number>100.000000000000000</number></property>
+           <property name="singleStep"><number>0.050000000000000</number></property>
+           <property name="suffix"><string>  tỷ</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QVBoxLayout">
+         <item><widget class="QLabel"><property name="text"><string>Giá bán (tỷ) *</string></property></widget></item>
+         <item>
+          <widget class="QDoubleSpinBox" name="spnGiaBan">
+           <property name="decimals"><number>3</number></property>
+           <property name="maximum"><number>100.000000000000000</number></property>
+           <property name="singleStep"><number>0.050000000000000</number></property>
+           <property name="suffix"><string>  tỷ</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </item>
+
+     <item>
+      <layout class="QHBoxLayout">
+       <property name="spacing"><number>12</number></property>
+       <item>
+        <layout class="QVBoxLayout">
+         <item><widget class="QLabel"><property name="text"><string>Số khung</string></property></widget></item>
+         <item><widget class="QLineEdit" name="txtSoKhung"/></item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QVBoxLayout">
+         <item><widget class="QLabel"><property name="text"><string>Số máy</string></property></widget></item>
+         <item><widget class="QLineEdit" name="txtSoMay"/></item>
+        </layout>
+       </item>
+      </layout>
+     </item>
+
+     <item><widget class="QLabel"><property name="text"><string>Trạng thái *</string></property></widget></item>
+     <item>
+      <widget class="QComboBox" name="cmbTrangThai">
+       <item><property name="text"><string>Còn hàng</string></property></item>
+       <item><property name="text"><string>Đã bán</string></property></item>
+       <item><property name="text"><string>Đặt cọc</string></property></item>
+       <item><property name="text"><string>Bảo dưỡng</string></property></item>
+      </widget>
+     </item>
+
+     <item><widget class="QLabel"><property name="text"><string>Mô tả</string></property></widget></item>
+     <item>
+      <widget class="QTextEdit" name="txtMoTa">
+       <property name="maximumHeight"><number>72</number></property>
+      </widget>
+     </item>
+
+    </layout>
+   </item>
+
+   <item>
+    <widget class="QFrame" name="divider2">
+     <property name="maximumHeight"><number>1</number></property>
+     <property name="styleSheet"><string>background:#2a2a4a;</string></property>
+    </widget>
+   </item>
+
+   <!-- BUTTONS -->
+   <item>
+    <layout class="QHBoxLayout" name="btnLayout">
+     <property name="leftMargin"><number>24</number></property>
+     <property name="topMargin"><number>16</number></property>
+     <property name="rightMargin"><number>24</number></property>
+     <property name="bottomMargin"><number>20</number></property>
+     <property name="spacing"><number>12</number></property>
+     <item>
+      <spacer><property name="orientation"><enum>Qt::Horizontal</enum></property></spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnHuy">
+       <property name="text"><string>Huỷ</string></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnCapNhat">
+       <property name="text"><string>✅  Cập nhật</string></property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

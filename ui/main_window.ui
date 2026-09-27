@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1280</width>
+    <height>760</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>1280</width>
+    <height>760</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>AutoViet — Hệ thống Quản lý Đại lý Xe Hơi v1.0</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QHBoxLayout" name="main_layout">
+    <property name="spacing">
+     <number>0</number>
+    </property>
+    <property name="leftMargin">
+     <number>0</number>
+    </property>
+    <property name="topMargin">
+     <number>0</number>
+    </property>
+    <property name="rightMargin">
+     <number>0</number>
+    </property>
+    <property name="bottomMargin">
+     <number>0</number>
+    </property>
+    <item>
+     <layout class="QVBoxLayout" name="sidebar_layout">
+      <property name="spacing">
+       <number>0</number>
+      </property>
+      <property name="leftMargin">
+       <number>0</number>
+      </property>
+      <property name="topMargin">
+       <number>0</number>
+      </property>
+      <property name="rightMargin">
+       <number>0</number>
+      </property>
+      <property name="bottomMargin">
+       <number>0</number>
+      </property>
+      <item>
+       <layout class="QVBoxLayout">
+        <property name="spacing">
+         <number>2</number>
+        </property>
+        <property name="leftMargin">
+         <number>16</number>
+        </property>
+        <property name="topMargin">
+         <number>10</number>
+        </property>
+        <property name="rightMargin">
+         <number>16</number>
+        </property>
+        <property name="bottomMargin">
+         <number>8</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="lbl_logo">
+          <property name="text">
+           <string>🚗  Auto 99</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="lbl_logo_sub">
+          <property name="text">
+           <string/>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QFrame" name="line_logo">
+        <property name="frameShape">
+         <enum>QFrame::HLine</enum>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QTreeWidget" name="treeWidget">
+        <property name="indentation">
+         <number>14</number>
+        </property>
+        <property name="headerHidden">
+         <bool>true</bool>
+        </property>
+        <column>
+         <property name="text">
+          <string>Menu</string>
+         </property>
+        </column>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QStackedWidget" name="stackedWidget">
+      <widget class="QWidget" name="page_dashboard"/>
+      <widget class="QWidget" name="page_xe"/>
+      <widget class="QWidget" name="page_khach_hang"/>
+      <widget class="QWidget" name="page_don_hang"/>
+      <widget class="QWidget" name="page_nhan_vien"/>
+      <widget class="QWidget" name="page_dich_vu"/>
+      <widget class="QWidget" name="page_bao_cao"/>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1280</width>
+     <height>21</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menu_file">
+    <property name="title">
+     <string>  Tệp  </string>
+    </property>
+    <addaction name="action_backup"/>
+    <addaction name="separator"/>
+    <addaction name="action_exit"/>
+   </widget>
+   <widget class="QMenu" name="menu_manage">
+    <property name="title">
+     <string>  Quản lý  </string>
+    </property>
+    <addaction name="action_xe"/>
+    <addaction name="action_kh"/>
+    <addaction name="action_dh"/>
+    <addaction name="action_nv"/>
+    <addaction name="action_dv"/>
+   </widget>
+   <widget class="QMenu" name="menu_report">
+    <property name="title">
+     <string>  Báo cáo  </string>
+    </property>
+    <addaction name="action_rpt_dt"/>
+    <addaction name="action_rpt_tk"/>
+    <addaction name="action_rpt_excel"/>
+   </widget>
+   <widget class="QMenu" name="menu_tools">
+    <property name="title">
+     <string>  Công cụ  </string>
+    </property>
+    <addaction name="action_refresh"/>
+   </widget>
+   <widget class="QMenu" name="menu_help">
+    <property name="title">
+     <string>  Trợ giúp  </string>
+    </property>
+    <addaction name="action_about"/>
+   </widget>
+   <addaction name="menu_file"/>
+   <addaction name="menu_manage"/>
+   <addaction name="menu_report"/>
+   <addaction name="menu_tools"/>
+   <addaction name="menu_help"/>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+  <action name="action_backup">
+   <property name="text">
+    <string>💾 Sao lưu dữ liệu</string>
+   </property>
+  </action>
+  <action name="action_exit">
+   <property name="text">
+    <string>🚪 Thoát</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Q</string>
+   </property>
+  </action>
+  <action name="action_xe">
+   <property name="text">
+    <string>🚗 Danh sách xe</string>
+   </property>
+  </action>
+  <action name="action_kh">
+   <property name="text">
+    <string>👥 Khách hàng</string>
+   </property>
+  </action>
+  <action name="action_dh">
+   <property name="text">
+    <string>📋 Đơn hàng</string>
+   </property>
+  </action>
+  <action name="action_nv">
+   <property name="text">
+    <string>🧑 Nhân viên</string>
+   </property>
+  </action>
+  <action name="action_dv">
+   <property name="text">
+    <string>🔧 Dịch vụ</string>
+   </property>
+  </action>
+  <action name="action_rpt_dt">
+   <property name="text">
+    <string>📊 Báo cáo doanh thu</string>
+   </property>
+  </action>
+  <action name="action_rpt_tk">
+   <property name="text">
+    <string>📦 Báo cáo tồn kho</string>
+   </property>
+  </action>
+  <action name="action_rpt_excel">
+   <property name="text">
+    <string>📤 Xuất Excel tổng hợp</string>
+   </property>
+  </action>
+  <action name="action_refresh">
+   <property name="text">
+    <string>🔄 Làm mới</string>
+   </property>
+   <property name="shortcut">
+    <string>F5</string>
+   </property>
+  </action>
+  <action name="action_about">
+   <property name="text">
+    <string>ℹ Giới thiệu</string>
+   </property>
+  </action>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

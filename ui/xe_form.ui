@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>XeDialog</class>
+ <widget class="QDialog" name="XeDialog">
+  <property name="geometry"><rect><x>0</x><y>0</y><width>520</width><height>600</height></rect></property>
+  <property name="windowTitle"><string>Thêm / Sửa thông tin xe</string></property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="contentsMargins"><rect><left>24</left><top>20</top><right>24</right><bottom>20</bottom></rect></property>
+   <property name="spacing"><number>12</number></property>
+   <item><widget class="QLabel" name="lbl_form_title"><property name="text"><string>THÔNG TIN XE HƠI</string></property><property name="objectName"><string>detail_key_form</string></property></widget></item>
+   <item>
+    <layout class="QFormLayout" name="formLayout">
+     <property name="labelAlignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
+     <property name="horizontalSpacing"><number>14</number></property><property name="verticalSpacing"><number>10</number></property>
+     <item row="0" column="0"><widget class="QLabel"><property name="text"><string>Mã xe *</string></property></widget></item>
+     <item row="0" column="1"><widget class="QLineEdit" name="txt_ma_xe"><property name="placeholderText"><string>VD: XE009</string></property></widget></item>
+     <item row="1" column="0"><widget class="QLabel"><property name="text"><string>Hãng xe *</string></property></widget></item>
+     <item row="1" column="1"><widget class="QLineEdit" name="txt_hang_xe"><property name="placeholderText"><string>Toyota, Honda, Kia...</string></property></widget></item>
+     <item row="2" column="0"><widget class="QLabel"><property name="text"><string>Dòng xe *</string></property></widget></item>
+     <item row="2" column="1"><widget class="QLineEdit" name="txt_dong_xe"><property name="placeholderText"><string>Camry, Civic, Sorento...</string></property></widget></item>
+     <item row="3" column="0"><widget class="QLabel"><property name="text"><string>Năm SX *</string></property></widget></item>
+     <item row="3" column="1"><widget class="QSpinBox" name="spin_nam_sx"><property name="minimum"><number>1990</number></property><property name="maximum"><number>2030</number></property><property name="value"><number>2024</number></property></widget></item>
+     <item row="4" column="0"><widget class="QLabel"><property name="text"><string>Màu sắc</string></property></widget></item>
+     <item row="4" column="1"><widget class="QLineEdit" name="txt_mau_sac"><property name="placeholderText"><string>Trắng Ngọc Trai, Đen Ánh Kim...</string></property></widget></item>
+     <item row="5" column="0"><widget class="QLabel"><property name="text"><string>Số khung</string></property></widget></item>
+     <item row="5" column="1"><widget class="QLineEdit" name="txt_so_khung"><property name="placeholderText"><string>Mã số khung (VIN)</string></property></widget></item>
+     <item row="6" column="0"><widget class="QLabel"><property name="text"><string>Số máy</string></property></widget></item>
+     <item row="6" column="1"><widget class="QLineEdit" name="txt_so_may"><property name="placeholderText"><string>Mã số máy xe</string></property></widget></item>
+     <item row="7" column="0"><widget class="QLabel"><property name="text"><string>Giá nhập *</string></property></widget></item>
+     <item row="7" column="1"><widget class="QDoubleSpinBox" name="spin_gia_nhap"><property name="maximum"><double>100000000000.000000000000000</double></property><property name="singleStep"><double>1000000.000000000000000</double></property><property name="decimals"><number>0</number></property><property name="suffix"><string> ₫</string></property></widget></item>
+     <item row="8" column="0"><widget class="QLabel"><property name="text"><string>Giá bán *</string></property></widget></item>
+<item row="8" column="1"><widget class="QDoubleSpinBox" name="spin_gia_ban"><property name="maximum"><double>100000000000.000000000000000</double></property><property name="singleStep"><double>1000000.000000000000000</double></property><property name="decimals"><number>0</number></property><property name="suffix"><string> ₫</string></property></widget></item>
+     <item row="9" column="0"><widget class="QLabel"><property name="text"><string>Tình trạng</string></property></widget></item>
+     <item row="9" column="1"><widget class="QComboBox" name="cbo_tinh_trang"><item><property name="text"><string>Mới</string></property></item><item><property name="text"><string>Đã qua sử dụng</string></property></item></widget></item>
+     <item row="10" column="0"><widget class="QLabel"><property name="text"><string>Trạng thái</string></property></widget></item>
+     <item row="10" column="1"><widget class="QComboBox" name="cbo_trang_thai"><item><property name="text"><string>Còn hàng</string></property></item><item><property name="text"><string>Đặt cọc</string></property></item><item><property name="text"><string>Đã bán</string></property></item><item><property name="text"><string>Bảo dưỡng</string></property></item></widget></item>
+     <item row="11" column="0"><widget class="QLabel"><property name="text"><string>Mô tả</string></property></widget></item>
+     <item row="11" column="1"><widget class="QTextEdit" name="txt_mo_ta"><property name="maximumHeight"><number>70</number></property><property name="placeholderText"><string>Mô tả thêm về xe...</string></property></widget></item>
+    </layout>
+   </item>
+   <item>
+    <layout class="QHBoxLayout">
+     <item><spacer><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+     <item><widget class="QPushButton" name="btn_cancel"><property name="text"><string>Huỷ bỏ</string></property></widget></item>
+     <item><widget class="QPushButton" name="btn_save"><property name="text"><string>💾  Lưu xe</string></property><property name="objectName"><string>btn_add</string></property><property name="default"><bool>true</bool></property></widget></item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections><connection><sender>btn_cancel</sender><signal>clicked()</signal><receiver>XeDialog</receiver><slot>reject()</slot><hints><hint type="sourcelabel"><x>20</x><y>20</y></hint><hint type="destinationlabel"><x>20</x><y>20</y></hint></hints></connection></connections>
+</ui>
