@@ -5,3 +5,4 @@ __pycache__/
 api_config.txt
 .idea/
 .env
+.pytest_cache/

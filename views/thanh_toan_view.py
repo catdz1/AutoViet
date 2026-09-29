@@ -154,6 +154,14 @@ TT_BG = {
     "Chờ xử lý": "rgba(167,139,250,.12)",
 }
 
+def validate_payment(order_total, paid_amount):
+        if paid_amount < 0:
+            return False, "Số tiền thanh toán không hợp lệ"
+
+        if paid_amount > order_total:
+            return False, "Số tiền thanh toán vượt giá trị đơn hàng"
+
+        return True, ""
 
 class ThanhToanView(QWidget):
     def __init__(self, current_user=None):
@@ -167,6 +175,7 @@ class ThanhToanView(QWidget):
         self._build()
         self._ensure_columns()
         self._load()
+
 
     def _ensure_columns(self):
         """Thêm cột thanh toán vào bảng don_hang nếu chưa có"""
@@ -926,20 +935,57 @@ class ThanhToanDialog(QDialog):
             self.f_da_tt.setValue(gia)
         elif tt == "Chưa thanh toán":
             self.f_da_tt.setValue(0)
+    def _update_conlai(self): 
+        gia = (
+            self.data.get("gia_ban_thuc", 0)
+            - self.data.get("chiet_khau", 0)
+        )
 
-    def _update_conlai(self):
-        gia = self.data.get("gia_ban_thuc", 0) - self.data.get("chiet_khau", 0)
-        con = max(0, gia - self.f_da_tt.value())
+        con = gia - self.f_da_tt.value()
+
         self.f_con_lai.setText(f"{con:,.0f} ₫")
-        if con == 0:
-            self.f_con_lai.setStyleSheet("color:#065f46;font-weight:700;background:#f0fdf4;"
-                                         "border:0.5px solid #a7f3d0;"
-                                         "border-radius:8px;padding:8px 12px;font-size:14px;")
+
+        if con < 0:
+            self.f_con_lai.setStyleSheet(
+                "color:#dc2626;font-weight:700;"
+                "background:#fef2f2;"
+                "border:1px solid #fecaca;"
+                "border-radius:8px;"
+                "padding:8px 12px;font-size:14px;"
+            )
+        elif con == 0:
+                self.f_con_lai.setStyleSheet(
+                "color:#065f46;font-weight:700;"
+                "background:#f0fdf4;"
+                "border:0.5px solid #a7f3d0;"
+                "border-radius:8px;padding:8px 12px;font-size:14px;"
+            )
         else:
-            self.f_con_lai.setStyleSheet("color:#f87171;background:#13151c;border:1px solid #2c3050;"
-                                          "border-radius:8px;padding:8px 12px;font-size:13px;")
+            self.f_con_lai.setStyleSheet(
+                "color:#f87171;background:#13151c;"
+                "border:1px solid #2c3050;"
+                "border-radius:8px;padding:8px 12px;font-size:13px;"
+            )
 
     def _save(self):
+        gia = (
+            self.data.get("gia_ban_thuc", 0)
+            - self.data.get("chiet_khau", 0)
+        )
+
+        so_tien = self.f_da_tt.value()
+
+        # Kiểm tra số tiền thanh toán
+        ok, message = validate_payment(gia, so_tien)
+
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "Cảnh báo",
+                message
+            )
+            return
+
         conn = get_conn()
 
         try:
@@ -961,9 +1007,9 @@ class ThanhToanDialog(QDialog):
 
             conn.commit()
 
-            # =========================
-            # HIỆN POPUP THÀNH CÔNG
-            # =========================
+        # =========================
+        # HIỆN POPUP THÀNH CÔNG
+        # =========================
 
             if self.f_tt.currentText() == "Đã thanh toán":
 
@@ -991,6 +1037,7 @@ class ThanhToanDialog(QDialog):
 
         finally:
             conn.close()
+
     def _build_tab_ai(self):
         w = QWidget()
         w.setStyleSheet("background:#f0f4f8;")

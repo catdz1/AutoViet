@@ -8,12 +8,123 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
     QDialog, QFormLayout, QComboBox, QLineEdit, QMessageBox,
-    QDoubleSpinBox, QProgressBar, QScrollArea
+    QDoubleSpinBox, QProgressBar, QScrollArea, QDateEdit, QFileDialog
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDate, QTimer
 from PyQt6.QtGui import QColor, QFont
 from database import get_conn
 from datetime import datetime, date
+
+
+import calendar
+
+def tinh_tien_tra_gop(tong, lai_suat, so_ky):
+    """
+    Tính số tiền trả mỗi kỳ.
+    
+    lai_suat truyền vào theo %/tháng.
+    Ví dụ: 0.8 nghĩa là 0.8%.
+    """
+    if so_ky <= 0:
+        return 0
+
+    lai = lai_suat / 100
+
+    if lai > 0:
+        return (
+            tong * lai * (1 + lai) ** so_ky
+            / ((1 + lai) ** so_ky - 1)
+        )
+
+    return tong / so_ky
+
+def _add_months(d, n):
+    """Cộng n tháng vào ngày d (cắt về cuối tháng nếu tháng đích ngắn hơn)."""
+    m = d.month - 1 + n
+    y = d.year + m // 12
+    m = m % 12 + 1
+    return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def _ngay_ky_tiep(row):
+    """Ngày đến hạn của kỳ kế tiếp, hoặc None nếu ngày bắt đầu không hợp lệ."""
+    try:
+        bd = datetime.strptime(row.get("ngay_bat_dau") or "", "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return _add_months(bd, (row.get("da_tra") or 0) + 1)
+
+
+def _norm_status(tt, so_ky, da_tra):
+    """Chuẩn hoá trạng thái (dữ liệu cũ có thể là 'Dang tra' / 'Hoan thanh')."""
+    t = (tt or "").strip().lower()
+    if t in ("hoàn thành", "hoan thanh") or (so_ky > 0 and da_tra >= so_ky):
+        return "Hoàn thành"
+    return "Đang trả góp"
+
+
+def _next_ma_tg(conn):
+    n = (conn.execute("SELECT COALESCE(MAX(id),0) FROM tra_gop").fetchone()[0] or 0) + 1
+    while conn.execute("SELECT 1 FROM tra_gop WHERE ma_tg=?", (f"TG{n:03d}",)).fetchone():
+        n += 1
+    return f"TG{n:03d}"
+
+
+def _next_ma_tt(conn):
+    n = (conn.execute("SELECT COALESCE(MAX(id),0) FROM thanh_toan").fetchone()[0] or 0) + 1
+    while conn.execute("SELECT 1 FROM thanh_toan WHERE ma_tt=?", (f"TT{n:04d}",)).fetchone():
+        n += 1
+    return f"TT{n:04d}"
+
+
+def _goc_da_tra(tong, lai_pct, so_ky, tien_ky, k):
+    """Phần GỐC đã hoàn trả sau k kỳ (không tính phần lãi)."""
+    if so_ky > 0 and k >= so_ky:
+        return tong
+    if k <= 0:
+        return 0
+    r = (lai_pct or 0) / 100
+    if r <= 0:
+        return tong * k / so_ky
+    du_no = tong * (1 + r) ** k - tien_ky * ((1 + r) ** k - 1) / r
+    return min(tong, max(0, tong - du_no))
+
+
+def _dong_bo_don_hang(conn, tg_id):
+    """Cập nhật đơn hàng gắn với hợp đồng: số tiền đã thanh toán + trạng thái thanh toán.
+    (Màn Thanh toán đọc đúng 2 cột này của don_hang.) Không commit — người gọi commit."""
+    tg = conn.execute("SELECT * FROM tra_gop WHERE id=?", (tg_id,)).fetchone()
+    if not tg or not tg["don_hang_id"]:
+        return
+    dh = conn.execute("SELECT gia_ban_thuc FROM don_hang WHERE id=?", (tg["don_hang_id"],)).fetchone()
+    if not dh:
+        return
+    gia = dh["gia_ban_thuc"] or 0
+    so_ky = tg["so_thang"] or 0
+    da = tg["so_thang_da_tra"] or 0
+    truoc = tg["so_tien_tra_truoc"] or 0
+    if so_ky > 0 and da >= so_ky:                      # trả hết góp → đơn đã thanh toán đủ
+        da_tt, tt = gia, "Đã thanh toán"
+    else:
+        goc = _goc_da_tra(tg["tong_tien"] or 0, tg["lai_suat"], so_ky, tg["tien_hang_thang"] or 0, da)
+        da_tt = min(gia, truoc + goc)
+        tt = "Thanh toán một phần" if da_tt > 0 else "Chưa thanh toán"
+    conn.execute("UPDATE don_hang SET so_tien_da_tt=?, trang_thai_tt=? WHERE id=?",
+                 (int(round(da_tt)), tt, tg["don_hang_id"]))
+    if tt == "Đã thanh toán":
+        # Trạng thái xử lý của đơn (màn Đơn hàng): chỉ nâng "Chờ xử lý" → "Đã thanh toán".
+        # Không đụng tới "Đã giao xe" / "Huỷ" / "Đặt cọc" để không hạ cấp đơn.
+        conn.execute("UPDATE don_hang SET trang_thai='Đã thanh toán' "
+                     "WHERE id=? AND trang_thai IN ('Chờ xử lý','Cho xu ly')", (tg["don_hang_id"],))
+
+
+def _ghi_thanh_toan(conn, don_hang_id, so_tien, ghi_chu):
+    """Thêm 1 dòng lịch sử vào bảng thanh_toan (tiền thực thu, gồm cả lãi)."""
+    conn.execute(
+        "INSERT INTO thanh_toan (ma_tt, don_hang_id, so_tien, phuong_thuc, trang_thai, ngay_tt, ghi_chu) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (_next_ma_tt(conn), don_hang_id, so_tien, "Trả góp", "Hoàn thành",
+         date.today().strftime("%Y-%m-%d"), ghi_chu))
 
 
 STYLE = """
@@ -36,8 +147,8 @@ QTableWidget::item:selected{background:#eff6ff;color:#2563eb;}
 QHeaderView::section{background:#f8fafc;color:#2563eb;font-size:14px;font-weight:900;letter-spacing:1px;padding:14px;border:none;border-bottom:2px solid #2563eb;}
 QDialog{background:#ffffff;}
 QLabel{color:#1e293b;background:transparent;font-size:14px;font-weight:600;}
-QLineEdit,QComboBox,QDoubleSpinBox{background:#f9fafb;color:#111827;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;font-size:14px;}
-QLineEdit:focus,QComboBox:focus,QDoubleSpinBox:focus{border-color:#2563eb;background:#ffffff;}
+QLineEdit,QComboBox,QDoubleSpinBox,QDateEdit{background:#f9fafb;color:#111827;border:1px solid #e5e7eb;border-radius:8px;padding:9px 12px;font-size:14px;}
+QLineEdit:focus,QComboBox:focus,QDoubleSpinBox:focus,QDateEdit:focus{border-color:#2563eb;background:#ffffff;}
 QPushButton#dlg_save{background:#2563eb;color:white;border:none;border-radius:9px;font-size:14px;font-weight:700;padding:11px 24px;}
 QPushButton#dlg_save:hover{background:#1d4ed8;}
 QPushButton#dlg_cancel{background:#f3f4f6;color:#6b7280;border:1px solid #d1d5db;border-radius:9px;font-size:13px;padding:10px 20px;}
@@ -47,22 +158,26 @@ QProgressBar::chunk{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #0891b
 
 
 def _init_tragop_table():
+    """Schema phải trùng với database.py (bảng tra_gop)."""
     conn = get_conn()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tra_gop (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            don_hang_id INTEGER REFERENCES don_hang(id),
-            kh_id INTEGER REFERENCES khach_hang(id),
-            tong_tien REAL DEFAULT 0,
-            so_ky INTEGER DEFAULT 12,
-            tien_tra_moi_ky REAL DEFAULT 0,
-            da_tra INTEGER DEFAULT 0,
-            con_lai INTEGER DEFAULT 0,
-            lai_suat REAL DEFAULT 0.8,
-            ngay_bat_dau TEXT,
-            ghi_chu TEXT,
-            trang_thai TEXT DEFAULT 'Đang trả góp',
-            created_at TEXT DEFAULT (date('now'))
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            ma_tg           TEXT UNIQUE NOT NULL,
+            don_hang_id     INTEGER REFERENCES don_hang(id),
+            kh_id           INTEGER REFERENCES khach_hang(id),
+            tong_tien       REAL NOT NULL DEFAULT 0,
+            so_tien_tra_truoc REAL DEFAULT 0,
+            lai_suat        REAL DEFAULT 0,
+            so_thang        INTEGER DEFAULT 12,
+            tien_hang_thang REAL DEFAULT 0,
+            so_thang_da_tra INTEGER DEFAULT 0,
+            tong_da_tra     REAL DEFAULT 0,
+            con_lai         REAL DEFAULT 0,
+            trang_thai      TEXT DEFAULT 'Dang tra',
+            ngay_bat_dau    TEXT DEFAULT CURRENT_DATE,
+            ghi_chu         TEXT,
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit(); conn.close()
@@ -75,6 +190,7 @@ class TraGopView(QWidget):
         self.setStyleSheet(STYLE)
         self.current_user = current_user or {}
         self._rows = []; self._sel_id = None
+        self._auto_checked = False
         _init_tragop_table()
         self._build()
         self._load()
@@ -156,107 +272,169 @@ class TraGopView(QWidget):
         w._val = vl; return w
 
     def _load(self, q=""):
+        prev_sel = self._sel_id
         conn = get_conn()
-        sql = """SELECT tg.*, dh.ma_don, kh.ho_ten as ten_kh
+        # Đặt alias để phần còn lại của view dùng tên cột quen thuộc (so_ky, da_tra, ...)
+        sql = """SELECT tg.*,
+                        tg.so_thang AS so_ky,
+                        tg.tien_hang_thang AS tien_tra_moi_ky,
+                        tg.so_thang_da_tra AS da_tra,
+                        dh.ma_don, kh.ho_ten AS ten_kh
                  FROM tra_gop tg
                  LEFT JOIN don_hang dh ON tg.don_hang_id=dh.id
                  LEFT JOIN khach_hang kh ON tg.kh_id=kh.id"""
         p = []
-        if q: sql += " WHERE kh.ho_ten LIKE ? OR dh.ma_don LIKE ?"; p=[f"%{q}%"]*2
-        self._rows = [dict(r) for r in conn.execute(sql+" ORDER BY tg.id DESC",p).fetchall()]
+        if q:
+            sql += " WHERE kh.ho_ten LIKE ? OR dh.ma_don LIKE ? OR tg.ma_tg LIKE ?"
+            p = [f"%{q}%"] * 3
+        rows = [dict(r) for r in conn.execute(sql + " ORDER BY tg.id DESC", p).fetchall()]
         conn.close()
 
+        today = date.today()
+        for r in rows:
+            r["so_ky"] = r["so_ky"] or 0
+            r["da_tra"] = r["da_tra"] or 0
+            r["tien_tra_moi_ky"] = r["tien_tra_moi_ky"] or 0
+            r["tong_tien"] = r["tong_tien"] or 0
+            r["lai_suat"] = r["lai_suat"] or 0
+            r["con_lai_ky"] = max(0, r["so_ky"] - r["da_tra"])      # còn lại tính theo KỲ
+            r["trang_thai"] = _norm_status(r.get("trang_thai"), r["so_ky"], r["da_tra"])
+            r["trang_thai_hien_thi"] = r["trang_thai"]
+            if r["trang_thai"] == "Đang trả góp":
+                nd = _ngay_ky_tiep(r)
+                if nd and nd < today:
+                    r["trang_thai_hien_thi"] = "Trễ hạn"
+        self._rows = rows
+
         # Stats
-        total = sum(1 for r in self._rows if r["trang_thai"]=="Đang trả góp")
-        hoan  = sum(1 for r in self._rows if r["trang_thai"]=="Hoàn thành")
-        dt_conlai = sum((r["con_lai"] or 0) * (r["tien_tra_moi_ky"] or 0) for r in self._rows if r["trang_thai"]=="Đang trả góp")
-        dt_da = sum((r["da_tra"] or 0) * (r["tien_tra_moi_ky"] or 0) for r in self._rows)
+        total = sum(1 for r in rows if r["trang_thai"] == "Đang trả góp")
+        hoan = sum(1 for r in rows if r["trang_thai"] == "Hoàn thành")
+        dt_conlai = sum(r["con_lai_ky"] * r["tien_tra_moi_ky"] for r in rows if r["trang_thai"] == "Đang trả góp")
+        dt_da = sum(r["da_tra"] * r["tien_tra_moi_ky"] for r in rows)
         self.sc_total._val.setText(str(total))
         self.sc_hoan._val.setText(str(hoan))
         self.sc_dt_con._val.setText(f"{dt_conlai/1e6:.0f} triệu")
         self.sc_dt_da._val.setText(f"{dt_da/1e6:.0f} triệu")
 
-        STATUS_COL={"Đang trả góp":"#60a5fa","Hoàn thành":"#4ade80","Trễ hạn":"#f87171"}
+        STATUS_COL = {"Đang trả góp": "#60a5fa", "Hoàn thành": "#4ade80", "Trễ hạn": "#f87171"}
+        self.tbl.selectionModel().blockSignals(True)   # tránh _on_sel chạy giữa lúc dựng lại bảng
         self.tbl.setRowCount(0)
-        for row in self._rows:
-            r = self.tbl.rowCount(); self.tbl.insertRow(r); self.tbl.setRowHeight(r,50)
+        for row in rows:
+            r = self.tbl.rowCount(); self.tbl.insertRow(r); self.tbl.setRowHeight(r, 50)
             so_ky = row["so_ky"] or 1
-            da_tra = row["da_tra"] or 0
-            con_lai = row["con_lai"] or (so_ky - da_tra)
-            pct = int(da_tra/so_ky*100) if so_ky else 0
-            tien_ky = row["tien_tra_moi_ky"] or 0
+            da_tra = row["da_tra"]
+            con_lai = row["con_lai_ky"]
+            pct = min(100, int(da_tra / so_ky * 100))
+            tien_ky = row["tien_tra_moi_ky"]
 
-            vals = [str(row["id"]),row.get("ma_don","—") or "—",
-                    row.get("ten_kh","—") or "—",
+            vals = [str(row["id"]), row.get("ma_don") or "—",
+                    row.get("ten_kh") or "—",
                     f"{row['tong_tien']/1e9:.3f} tỷ",
                     f"{so_ky} kỳ",
                     f"{da_tra}/{so_ky} kỳ  ({da_tra*tien_ky/1e6:.0f}tr)",
                     f"{con_lai} kỳ  ({con_lai*tien_ky/1e6:.0f}tr)",
                     f"{pct}%",
                     f"{row['lai_suat']}%/tháng",
-                    row["trang_thai"]]
+                    row["trang_thai_hien_thi"]]
 
             for c, val in enumerate(vals):
                 item = QTableWidgetItem(val)
                 item.setData(Qt.ItemDataRole.UserRole, row["id"])
-                # ✅ Chữ to hơn, đậm hơn
                 item.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
                 if c == 7:
-                    # Progress bar
-                    pb = QProgressBar();
-                    pb.setValue(pct);
+                    pb = QProgressBar()
+                    pb.setValue(pct)
                     pb.setFormat(f"{pct}%")
                     self.tbl.setCellWidget(r, c, pb)
                     continue
                 if c == 9:
                     item.setForeground(QColor(STATUS_COL.get(val, "#94a3b8")))
-                    item.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
                 if c in [3, 5, 6]:
                     color = "#16a34a" if c == 5 else "#dc2626" if c == 6 else "#1e293b"
                     item.setForeground(QColor(color))
-                    item.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
                 self.tbl.setItem(r, c, item)
-    def _on_sel(self):
-        r = self.tbl.currentRow()
-        if 0<=r<len(self._rows): self._sel_id=self._rows[r]["id"]
+        self.tbl.selectionModel().blockSignals(False)
+
+        # Giữ lại dòng đang chọn nếu còn; nếu không thì bỏ chọn (tránh thao tác nhầm hợp đồng ẩn)
+        self._sel_id = None
+        if prev_sel is not None:
+            for i, r in enumerate(rows):
+                if r["id"] == prev_sel:
+                    self.tbl.selectRow(i)
+                    break
+
+    def _on_sel(self, *args):
+        items = self.tbl.selectedItems()
+        self._sel_id = items[0].data(Qt.ItemDataRole.UserRole) if items else None
+
+    def _selected_row(self):
+        return next((r for r in self._rows if r["id"] == self._sel_id), None)
 
     def _add(self):
         if TraGopDialog(self).exec(): self._load()
 
+    def _ghi_nhan_ky(self, conn, tg_id):
+        """Ghi nhận thu 1 kỳ. Đọc lại số liệu MỚI từ DB (không dùng dữ liệu cũ trên màn hình).
+        Trả về trạng thái mới, hoặc None nếu hợp đồng đã trả đủ / không tồn tại."""
+        r = conn.execute(
+            "SELECT ma_tg, don_hang_id, so_thang, so_thang_da_tra, tien_hang_thang FROM tra_gop WHERE id=?",
+            (tg_id,)).fetchone()
+        if not r: return None
+        so, da, tien = r["so_thang"] or 0, r["so_thang_da_tra"] or 0, r["tien_hang_thang"] or 0
+        if da >= so: return None
+        da += 1
+        tt = "Hoàn thành" if da >= so else "Đang trả góp"
+        conn.execute(
+            "UPDATE tra_gop SET so_thang_da_tra=?, tong_da_tra=?, con_lai=?, trang_thai=? WHERE id=?",
+            (da, tien * da, tien * (so - da), tt, tg_id))
+        if r["don_hang_id"]:
+            _dong_bo_don_hang(conn, tg_id)
+            _ghi_thanh_toan(conn, r["don_hang_id"], tien,
+                            f"Trả góp {r['ma_tg']} — kỳ {da}/{so}")
+        return tt
+
     def _pay(self):
-        if not self._sel_id:
-            QMessageBox.warning(self,"","Chọn hợp đồng!"); return
-        row = next((r for r in self._rows if r["id"]==self._sel_id),None)
-        if not row: return
-        con_lai = row.get("con_lai") or (row["so_ky"]-row["da_tra"])
-        if con_lai <= 0:
-            QMessageBox.information(self,"","Đã thanh toán hết!"); return
+        row = self._selected_row()
+        if not row:
+            QMessageBox.warning(self, "", "Chọn hợp đồng!"); return
+        if row["trang_thai"] == "Hoàn thành" or row["con_lai_ky"] <= 0:
+            QMessageBox.information(self, "", "Đã thanh toán hết!"); return
         if QMessageBox.question(self,
             "Ghi nhận thanh toán",
-            f"Khách: {row.get('ten_kh','')}\n"
+            f"Khách: {row.get('ten_kh') or ''}\n"
             f"Kỳ thứ: {row['da_tra']+1}/{row['so_ky']}\n"
-            f"Số tiền: {row['tien_tra_moi_ky']/1e6:.1f} triệu ₫\n\nXác nhận đã nhận tiền?",
-            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No
-        )==QMessageBox.StandardButton.Yes:
-            conn=get_conn()
-            new_da = row['da_tra']+1
-            new_con = con_lai-1
-            tt = "Hoàn thành" if new_con<=0 else "Đang trả góp"
-            conn.execute("UPDATE tra_gop SET da_tra=?,con_lai=?,trang_thai=? WHERE id=?",
-                (new_da, new_con, tt, self._sel_id))
-            conn.commit(); conn.close()
+            f"Số tiền: {row['tien_tra_moi_ky']/1e6:.1f} triệu ₫\n\nXác nhận đã nhận tiền?"
+            + ("\n(Đơn hàng và màn Thanh toán sẽ được cập nhật theo)" if row.get("ma_don") else ""),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) == QMessageBox.StandardButton.Yes:
+            conn = get_conn()
+            try:
+                tt = self._ghi_nhan_ky(conn, row["id"])
+                conn.commit()
+            finally:
+                conn.close()
             self._load()
-            if tt=="Hoàn thành":
-                QMessageBox.information(self,"🎉 Hoàn thành!","Khách hàng đã trả hết góp!")
+            if tt == "Hoàn thành":
+                msg = "Khách hàng đã trả hết góp!"
+                if row.get("ma_don"):
+                    msg += f"\nĐơn hàng {row['ma_don']} đã được ghi nhận thanh toán đủ."
+                QMessageBox.information(self, "🎉 Hoàn thành!", msg)
 
     def _delete(self):
-        if not self._sel_id:
-            QMessageBox.warning(self,"","Chọn hợp đồng!"); return
-        if QMessageBox.question(self,"Xác nhận","Xoá hợp đồng trả góp này?",
-            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No
-        )==QMessageBox.StandardButton.Yes:
-            conn=get_conn(); conn.execute("DELETE FROM tra_gop WHERE id=?",(self._sel_id,))
-            conn.commit(); conn.close(); self._sel_id=None; self._load()
+        row = self._selected_row()
+        if not row:
+            QMessageBox.warning(self, "", "Chọn hợp đồng!"); return
+        msg = "Xoá hợp đồng trả góp này?"
+        if row["trang_thai"] != "Hoàn thành" and row["da_tra"] > 0:
+            msg = (f"Hợp đồng {row.get('ma_tg') or row['id']} đang trả dở "
+                   f"({row['da_tra']}/{row['so_ky']} kỳ đã thu, còn {row['con_lai_ky']} kỳ).\n"
+                   f"Xoá sẽ mất toàn bộ lịch sử thu tiền.\n\nVẫn xoá?")
+        if QMessageBox.question(self, "Xác nhận", msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        ) == QMessageBox.StandardButton.Yes:
+            conn = get_conn(); conn.execute("DELETE FROM tra_gop WHERE id=?", (row["id"],))
+            conn.commit(); conn.close(); self._sel_id = None; self._load()
 
     def _nhac_nho(self):
         """🔔 Nhắc nhở kỳ đến hạn trong 7 ngày tới"""
@@ -273,8 +451,7 @@ class TraGopView(QWidget):
                 bd = datetime.strptime(ngay_bd, "%Y-%m-%d").date()
                 da_tra = row.get("da_tra", 0) or 0
                 # Ngày kỳ tiếp theo = ngày bắt đầu + (số kỳ đã trả + 1) tháng
-                from dateutil.relativedelta import relativedelta
-                ngay_ky_tiep = bd + relativedelta(months=da_tra + 1)
+                ngay_ky_tiep = _add_months(bd, da_tra + 1)
                 delta = (ngay_ky_tiep - today).days
                 ten_kh = row.get("ten_kh", "") or "—"
                 tien_ky = row.get("tien_tra_moi_ky", 0) or 0
@@ -368,7 +545,6 @@ class TraGopView(QWidget):
             from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
             from openpyxl.utils import get_column_letter
             import datetime as dt
-            from dateutil.relativedelta import relativedelta
 
             ten_kh = row.get("ten_kh", "KH") or "KH"
             tong = row.get("tong_tien", 0) or 0
@@ -376,7 +552,7 @@ class TraGopView(QWidget):
             tien_ky = row.get("tien_tra_moi_ky", 0) or 0
             da_tra = row.get("da_tra", 0) or 0
             lai = row.get("lai_suat", 0) or 0
-            ngay_bd_str = row.get("ngay_bat_dau", dt.date.today().strftime("%Y-%m-%d"))
+            ngay_bd_str = row.get("ngay_bat_dau") or dt.date.today().strftime("%Y-%m-%d")
             try:
                 ngay_bd = dt.datetime.strptime(ngay_bd_str, "%Y-%m-%d").date()
             except Exception:
@@ -446,7 +622,7 @@ class TraGopView(QWidget):
                 ri = hr + ky
                 ws.row_dimensions[ri].height = 22
 
-                ngay_ky = ngay_bd + relativedelta(months=ky)
+                ngay_ky = _add_months(ngay_bd, ky)
                 tien_lai = du_no * lai_thang
                 tien_goc = tien_ky - tien_lai if lai_thang > 0 else tien_ky
                 du_no = max(0, du_no - tien_goc)
@@ -502,7 +678,11 @@ class TraGopView(QWidget):
 
             import re
             ten_safe = re.sub(r'[^\w]', '_', ten_kh)
-            fname = f"LichTraGop_{ten_safe}_{dt.datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
+            default_name = f"LichTraGop_{ten_safe}_{dt.datetime.now().strftime('%d%m%Y_%H%M')}.xlsx"
+            fname, _ = QFileDialog.getSaveFileName(self, "Lưu lịch trả góp", default_name,
+                                                   "Excel (*.xlsx)")
+            if not fname:
+                return
             wb.save(fname)
             QMessageBox.information(self, "✅ Xuất thành công!",
                                     f"Đã xuất lịch trả góp:\n{fname}\n\n"
@@ -510,75 +690,45 @@ class TraGopView(QWidget):
 
         except ImportError:
             QMessageBox.critical(self, "Lỗi",
-                                 "Cần cài thêm:\npip install python-dateutil")
+                                 "Cần cài thêm:\npip install openpyxl")
         except Exception as e:
             import traceback
             QMessageBox.critical(self, "Lỗi", f"{str(e)}\n\n{traceback.format_exc()}")
 
-    def _auto_check_khi_mo_app(self):
-        """Tự động check kỳ đến hạn hôm nay khi mở app"""
-        from datetime import date
-        try:
-            from dateutil.relativedelta import relativedelta
-        except ImportError:
-            return
+    def showEvent(self, e):
+        super().showEvent(e)
+        if not self._auto_checked:          # chỉ kiểm tra 1 lần, lúc mở tab lần đầu
+            self._auto_checked = True
+            QTimer.singleShot(300, self._auto_check_khi_mo_app)
 
+    def _auto_check_khi_mo_app(self):
+        """Báo các kỳ đã đến hạn / quá hạn khi mở tab. KHÔNG tự ghi nhận đã thu tiền:
+        chỉ mở danh sách để người dùng tick xác nhận từng hợp đồng."""
         today = date.today()
         den_han = []
-
         for row in self._rows:
-            if row.get("trang_thai") != "Đang trả góp": continue
-            ngay_bd = row.get("ngay_bat_dau", "")
-            if not ngay_bd: continue
-            try:
-                from datetime import datetime
-                bd = datetime.strptime(ngay_bd, "%Y-%m-%d").date()
-                da_tra = row.get("da_tra", 0) or 0
-                ngay_ky_tiep = bd + relativedelta(months=da_tra + 1)
-                delta = (ngay_ky_tiep - today).days
-                if delta <= 0:  # Đến hạn hoặc quá hạn
-                    den_han.append(row)
-            except Exception:
-                continue
-
+            if row["trang_thai"] != "Đang trả góp": continue
+            nd = _ngay_ky_tiep(row)
+            if nd and (nd - today).days <= 0:
+                den_han.append(row)
         if not den_han:
-            return  # Không có gì → không hiện gì
-
-        ten_kh_list = "\n".join([
-                                    f"• {r.get('ten_kh', '—')}  —  Kỳ {(r.get('da_tra', 0) or 0) + 1}/{r.get('so_ky', 0)}  —  {(r.get('tien_tra_moi_ky', 0) or 0) / 1e6:.1f} triệu"
-                                    for r in den_han])
-
-        ret = QMessageBox.question(self,
-                                   "🔔 Kỳ trả góp đến hạn hôm nay!",
-                                   f"Có {len(den_han)} hợp đồng đến hạn hôm nay:\n\n{ten_kh_list}\n\n"
-                                   f"Tự động ghi nhận đã thu tiền tất cả?",
-                                   QMessageBox.StandardButton.Yes |
-                                   QMessageBox.StandardButton.No)
-
+            return
+        ds = "\n".join(
+            f"• {r.get('ten_kh') or '—'}  —  Kỳ {r['da_tra'] + 1}/{r['so_ky']}  —  {r['tien_tra_moi_ky'] / 1e6:.1f} triệu"
+            for r in den_han[:10])
+        if len(den_han) > 10:
+            ds += f"\n… và {len(den_han) - 10} hợp đồng khác"
+        ret = QMessageBox.question(
+            self, "🔔 Kỳ trả góp đến hạn!",
+            f"Có {len(den_han)} hợp đồng đã đến hạn / quá hạn:\n\n{ds}\n\n"
+            f"Mở danh sách ghi nhận hàng loạt để xác nhận thu tiền?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if ret == QMessageBox.StandardButton.Yes:
-            conn = get_conn()
-            for row in den_han:
-                da_tra = (row.get("da_tra") or 0) + 1
-                con_lai = (row.get("con_lai") or row["so_ky"]) - 1
-                tt = "Hoàn thành" if con_lai <= 0 else "Đang trả góp"
-                conn.execute(
-                    "UPDATE tra_gop SET da_tra=?,con_lai=?,trang_thai=? WHERE id=?",
-                    (da_tra, con_lai, tt, row["id"]))
-            conn.commit();
-            conn.close()
-            self._load()
-            QMessageBox.information(self, "✅ Hoàn tất!",
-                                    f"Đã ghi nhận {len(den_han)} kỳ trả góp tự động!")
+            self._ghi_nhan_hang_loat()
 
     def _ghi_nhan_hang_loat(self):
         """Ghi nhận nhiều kỳ trả cùng lúc"""
         from datetime import date
-        try:
-            from dateutil.relativedelta import relativedelta
-        except ImportError:
-            QMessageBox.critical(self, "Lỗi", "pip install python-dateutil");
-            return
-
         today = date.today()
 
         # Dialog chọn hợp đồng
@@ -638,7 +788,7 @@ class TraGopView(QWidget):
                 from datetime import datetime as dt2
                 bd = dt2.strptime(row.get("ngay_bat_dau", "2026-01-01"), "%Y-%m-%d").date()
                 da_tra = row.get("da_tra", 0) or 0
-                ngay_ky = bd + relativedelta(months=da_tra + 1)
+                ngay_ky = _add_months(bd, da_tra + 1)
                 delta = (ngay_ky - today).days
                 ngay_str = ngay_ky.strftime("%d/%m/%Y")
                 if delta < 0:
@@ -717,16 +867,13 @@ class TraGopView(QWidget):
                                     ) == QMessageBox.StandardButton.Yes:
                 conn = get_conn()
                 hoan_thanh = 0
-                for row in selected:
-                    da_tra = (row.get("da_tra") or 0) + 1
-                    con_lai = (row.get("con_lai") or row["so_ky"]) - 1
-                    tt = "Hoàn thành" if con_lai <= 0 else "Đang trả góp"
-                    if con_lai <= 0: hoan_thanh += 1
-                    conn.execute(
-                        "UPDATE tra_gop SET da_tra=?,con_lai=?,trang_thai=? WHERE id=?",
-                        (da_tra, con_lai, tt, row["id"]))
-                conn.commit();
-                conn.close()
+                try:
+                    for row in selected:
+                        if self._ghi_nhan_ky(conn, row["id"]) == "Hoàn thành":
+                            hoan_thanh += 1
+                    conn.commit()
+                finally:
+                    conn.close()
                 self._load()
                 dlg.accept()
                 msg = f"✅ Đã ghi nhận {len(selected)} kỳ trả góp!"
@@ -746,15 +893,14 @@ class TraGopView(QWidget):
         self._load()
 
 
-    def refresh(self): self._load()
-
-
 class TraGopDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Tạo hợp đồng trả góp")
         self.setMinimumWidth(500)
         self.setStyleSheet(STYLE)
+        self._moi_ky = 0
+        self._dh_info = {}          # don_hang_id -> (kh_id, gia_ban_thuc)
         self._build()
 
     def _build(self):
@@ -769,18 +915,27 @@ class TraGopDialog(QDialog):
         form = QFormLayout(); form.setSpacing(10); form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         conn = get_conn()
+        # Chỉ liệt kê đơn trả góp CHƯA có hợp đồng
         dh_rows = conn.execute("""
-            SELECT dh.id, dh.ma_don, kh.ho_ten, dh.gia_ban_thuc
+            SELECT dh.id, dh.ma_don, dh.kh_id, kh.ho_ten, dh.gia_ban_thuc
             FROM don_hang dh JOIN khach_hang kh ON dh.kh_id=kh.id
-            WHERE dh.phuong_thuc='Trả góp'
+            WHERE dh.phuong_thuc IN ('Trả góp','Tra gop')
+              AND dh.id NOT IN (SELECT don_hang_id FROM tra_gop WHERE don_hang_id IS NOT NULL)
             ORDER BY dh.id DESC""").fetchall()
         kh_rows = conn.execute("SELECT id,ma_kh,ho_ten FROM khach_hang ORDER BY id DESC").fetchall()
         conn.close()
 
         self.f_dh = QComboBox()
-        for r in dh_rows: self.f_dh.addItem(f"{r[1]} — {r[2]} ({r[3]/1e9:.2f} tỷ)", r[0])
+        self.f_dh.addItem("— Không gắn đơn hàng —", None)
+        for r in dh_rows:
+            gia = r["gia_ban_thuc"] or 0
+            self._dh_info[r["id"]] = (r["kh_id"], gia)
+            self.f_dh.addItem(f"{r['ma_don']} — {r['ho_ten']} ({gia/1e9:.2f} tỷ)", r["id"])
         self.f_kh = QComboBox()
         for r in kh_rows: self.f_kh.addItem(f"{r[1]} — {r[2]}", r[0])
+        self.f_truoc = QDoubleSpinBox()
+        self.f_truoc.setRange(0,10e9); self.f_truoc.setSingleStep(50e6)
+        self.f_truoc.setDecimals(0); self.f_truoc.setSuffix(" ₫")
         self.f_tong = QDoubleSpinBox()
         self.f_tong.setRange(0,10e9); self.f_tong.setSingleStep(50e6)
         self.f_tong.setDecimals(0); self.f_tong.setSuffix(" ₫")
@@ -790,7 +945,9 @@ class TraGopDialog(QDialog):
         self.f_lai = QDoubleSpinBox()
         self.f_lai.setRange(0,5); self.f_lai.setSingleStep(0.1)
         self.f_lai.setValue(0.8); self.f_lai.setSuffix("%/tháng")
-        self.f_ngay = QLineEdit(date.today().strftime("%Y-%m-%d"))
+        self.f_ngay = QDateEdit(QDate.currentDate())
+        self.f_ngay.setDisplayFormat("yyyy-MM-dd")
+        self.f_ngay.setCalendarPopup(True)
         self.f_ghi = QLineEdit(); self.f_ghi.setPlaceholderText("Ghi chú...")
 
         def lbl(t, color="#0284c7"):
@@ -799,16 +956,20 @@ class TraGopDialog(QDialog):
             return l
 
         for (txt, color), w in zip([("Đơn hàng", "#0284c7"), ("Khách hàng *", "#0284c7"),
-                                    ("Tổng tiền vay *", "#dc2626"), ("Số kỳ thanh toán", "#f97316"),
+                                    ("Trả trước", "#0284c7"), ("Tổng tiền vay *", "#dc2626"),
+                                    ("Số kỳ thanh toán", "#f97316"),
                                     ("Lãi suất", "#059669"), ("Ngày bắt đầu", "#7c3aed"),
                                     ("Ghi chú", "#6b7280")],
-                                   [self.f_dh, self.f_kh, self.f_tong, self.f_ky, self.f_lai, self.f_ngay, self.f_ghi]):
+                                   [self.f_dh, self.f_kh, self.f_truoc, self.f_tong, self.f_ky,
+                                    self.f_lai, self.f_ngay, self.f_ghi]):
             form.addRow(lbl(txt, color), w)
 
         # Auto tính tiền mỗi kỳ
         self.lbl_tieng = QLabel("💰 Mỗi kỳ: 0 ₫")
         self.lbl_tieng.setStyleSheet("color:#4ade80;font-size:13px;font-weight:700;background:#052e16;border-radius:8px;padding:8px 12px;")
         form.addRow("", self.lbl_tieng)
+        self.f_dh.currentIndexChanged.connect(lambda _=None: self._on_dh_changed())
+        self.f_truoc.valueChanged.connect(lambda _=None: self._on_dh_changed())
         self.f_tong.valueChanged.connect(self._calc)
         self.f_ky.currentTextChanged.connect(self._calc)
         self.f_lai.valueChanged.connect(self._calc)
@@ -819,38 +980,66 @@ class TraGopDialog(QDialog):
         bs = QPushButton("💳  Tạo hợp đồng"); bs.setObjectName("dlg_save")
         bs.clicked.connect(self._save); bs.setDefault(True)
         bh.addWidget(bc); bh.addWidget(bs); outer.addLayout(bh)
+        self._on_dh_changed()
         self._calc()
+
+    def _on_dh_changed(self):
+        """Chọn đơn hàng → tự điền khách hàng và tổng vay (= giá bán − trả trước)."""
+        info = self._dh_info.get(self.f_dh.currentData())
+        if not info:
+            return
+        kh_id, gia = info
+        idx = self.f_kh.findData(kh_id)
+        if idx >= 0:
+            self.f_kh.setCurrentIndex(idx)
+        self.f_tong.setValue(max(0, gia - self.f_truoc.value()))
 
     def _calc(self):
         try:
             tong = self.f_tong.value()
             ky = int(self.f_ky.currentText())
-            lai = self.f_lai.value() / 100
-            if lai > 0:
-                # Tính tiền mỗi kỳ theo công thức PMT
-                moi_ky = tong * lai * (1+lai)**ky / ((1+lai)**ky - 1)
-            else:
-                moi_ky = tong / ky if ky > 0 else 0
-            self.lbl_tieng.setText(f"💰 Mỗi kỳ: {moi_ky/1e6:.2f} triệu ₫  |  Tổng: {moi_ky*ky/1e6:.1f} triệu")
+            lai = self.f_lai.value()
+
+            moi_ky = tinh_tien_tra_gop(tong, lai, ky)
+            self.lbl_tieng.setText(
+                f"💰 Mỗi kỳ: {moi_ky/1e6:.2f} triệu ₫  |  "
+            f"Tổng: {moi_ky*ky/1e6:.1f} triệu"
+            )
             self._moi_ky = moi_ky
-        except Exception: self._moi_ky = 0
+        except Exception:
+            self._moi_ky = 0
 
     def _save(self):
         kh_id = self.f_kh.currentData()
         tong = self.f_tong.value()
         ky = int(self.f_ky.currentText())
-        if not kh_id or tong<=0:
-            QMessageBox.warning(self,"","Điền đủ thông tin!"); return
-        conn=get_conn()
+        if not kh_id or tong <= 0:
+            QMessageBox.warning(self, "", "Điền đủ thông tin!"); return
+        self._calc()
+        moi_ky = self._moi_ky
+        if moi_ky <= 0:
+            QMessageBox.warning(self, "", "Không tính được tiền mỗi kỳ — kiểm tra lại số tiền vay / số kỳ / lãi suất!"); return
+        dh_id = self.f_dh.currentData()
+        conn = get_conn()
         try:
-            conn.execute("""INSERT INTO tra_gop
-                (don_hang_id,kh_id,tong_tien,so_ky,tien_tra_moi_ky,da_tra,con_lai,lai_suat,ngay_bat_dau,ghi_chu)
-                VALUES(?,?,?,?,?,0,?,?,?,?)""",
-                (self.f_dh.currentData(),kh_id,tong,ky,
-                 self._moi_ky,ky,self.f_lai.value(),
-                 self.f_ngay.text(),self.f_ghi.text()))
+            if dh_id is not None and conn.execute(
+                    "SELECT 1 FROM tra_gop WHERE don_hang_id=?", (dh_id,)).fetchone():
+                QMessageBox.warning(self, "", "Đơn hàng này đã có hợp đồng trả góp!"); return
+            ma_tg = _next_ma_tg(conn)
+            cur = conn.execute("""INSERT INTO tra_gop
+                (ma_tg, don_hang_id, kh_id, tong_tien, so_tien_tra_truoc, lai_suat, so_thang,
+                 tien_hang_thang, so_thang_da_tra, tong_da_tra, con_lai, trang_thai,
+                 ngay_bat_dau, ghi_chu)
+                VALUES (?,?,?,?,?,?,?,?,0,0,?,?,?,?)""",
+                (ma_tg, dh_id, kh_id, tong, self.f_truoc.value(), self.f_lai.value(), ky,
+                 moi_ky, moi_ky * ky, "Đang trả góp",
+                 self.f_ngay.date().toString("yyyy-MM-dd"), self.f_ghi.text().strip()))
+            if dh_id is not None:
+                _dong_bo_don_hang(conn, cur.lastrowid)          # ghi nhận tiền trả trước (nếu có)
+                if self.f_truoc.value() > 0:
+                    _ghi_thanh_toan(conn, dh_id, self.f_truoc.value(), f"Trả trước hợp đồng {ma_tg}")
             conn.commit()
-            QMessageBox.information(self,"✅ OK","Tạo hợp đồng trả góp thành công!")
+            QMessageBox.information(self, "✅ OK", f"Tạo hợp đồng trả góp {ma_tg} thành công!")
             self.accept()
-        except Exception as e: QMessageBox.critical(self,"Lỗi",str(e))
+        except Exception as e: QMessageBox.critical(self, "Lỗi", str(e))
         finally: conn.close()
