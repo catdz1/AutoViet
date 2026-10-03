@@ -781,6 +781,16 @@ class KhachHangDialog(BaseDialog):
         if not all([ma,ten,sdt]): QMessageBox.warning(self,"","Điền đủ Mã KH, Họ tên, Số ĐT!"); return
         conn=get_conn()
         try:
+            self_id = self.data["id"] if self.data else None
+            dup = conn.execute(
+                "SELECT ma_kh, ho_ten FROM khach_hang WHERE so_dt=? AND id IS NOT ?",
+                (sdt, self_id)
+            ).fetchone()
+            if dup:
+                QMessageBox.warning(self, "",
+                    f"Số điện thoại «{sdt}» đã thuộc khách hàng {dup[0]} — {dup[1]}!")
+                return
+
             vals=(ten,sdt,self.f_email.text(),self.f_dc.text(),self.f_cmnd.text(),self.f_ns.text(),self.f_loai.currentText(),self.f_ghi.toPlainText())
             if self.data: conn.execute("UPDATE khach_hang SET ho_ten=?,so_dt=?,email=?,dia_chi=?,cmnd=?,ngay_sinh=?,loai_kh=?,ghi_chu=? WHERE id=?",vals+(self.data["id"],))
             else: conn.execute("INSERT INTO khach_hang(ma_kh,ho_ten,so_dt,email,dia_chi,cmnd,ngay_sinh,loai_kh,ghi_chu) VALUES(?,?,?,?,?,?,?,?,?)",(ma,)+vals)

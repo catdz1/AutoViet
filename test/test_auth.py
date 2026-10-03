@@ -7,7 +7,6 @@ import auth
 def test_db(tmp_path, monkeypatch):
     """
     Tạo database riêng cho Unit Test.
-    Không đụng vào dealership.db thật.
     """
     db_path = tmp_path / "test_users.db"
 

@@ -145,6 +145,7 @@ TT_COLORS = {
     "Chưa thanh toán": "#f87171",
     "Thanh toán một phần": "#fbbf24",
     "Chờ xử lý": "#a78bfa",
+    "Huỷ": "#dc2626",
 }
 
 TT_BG = {
@@ -547,6 +548,7 @@ class ThanhToanView(QWidget):
                         "Chưa thanh toán": "#991b1b",
                         "Thanh toán một phần": "#92400e",
                         "Chờ xử lý": "#5b21b6",
+                        "Huỷ": "#7f1d1d",
                     }
                     item.setForeground(QColor(STATUS_COL_LIGHT.get(tt, "#374151")))
                     item.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
@@ -1004,6 +1006,15 @@ class ThanhToanDialog(QDialog):
                 self.f_gchu.toPlainText(),
                 self.data["id"]
             ))
+
+            if self.f_tt.currentText() == "Đã thanh toán":
+                # Đồng bộ sang trạng thái xử lý đơn (tab Đơn hàng đọc cột trang_thai).
+                # Chỉ nâng từ "Chờ xử lý" lên, không đụng "Đã giao xe" / "Huỷ".
+                conn.execute(
+                    "UPDATE don_hang SET trang_thai='Đã thanh toán' "
+                    "WHERE id=? AND trang_thai IN ('Chờ xử lý','Cho xu ly')",
+                    (self.data["id"],)
+                )
 
             conn.commit()
 

@@ -1060,13 +1060,32 @@ class XeDialog(QDialog):
         hang = self.f_hang.text().strip()
         dong = self.f_dong.text().strip()
         nam  = self.f_nam.text().strip()
+        skhung = self.f_skhung.text().strip()
+        smay   = self.f_smay.text().strip()
         if not all([ma, hang, dong, nam]):
             QMessageBox.warning(self,"","Điền đủ Mã xe, Hãng, Dòng xe, Năm!"); return
         conn = get_conn()
         try:
+            self_id = self.data["id"] if self.data else None
+
+            if skhung:
+                dup = conn.execute(
+                    "SELECT ma_xe FROM xe WHERE so_khung=? AND id IS NOT ?",
+                    (skhung, self_id)).fetchone()
+                if dup:
+                    QMessageBox.warning(self, "", f"Số khung «{skhung}» đã tồn tại (xe {dup[0]})!")
+                    return
+            if smay:
+                dup = conn.execute(
+                    "SELECT ma_xe FROM xe WHERE so_may=? AND id IS NOT ?",
+                    (smay, self_id)).fetchone()
+                if dup:
+                    QMessageBox.warning(self, "", f"Số máy «{smay}» đã tồn tại (xe {dup[0]})!")
+                    return
+
             vals = (hang, dong, int(nam), self.f_mau.text(),
                     self.f_gian.value(), self.f_gban.value(),
-                    self.f_skhung.text() or None, self.f_smay.text() or None,
+                    skhung or None, smay or None,
                     self.f_ttinh.currentText(), self.f_tt.currentText(),
                     self.f_mota.toPlainText())
             if self.data:
@@ -1311,18 +1330,27 @@ class XeDialogAI(QDialog):
     def _save(self):
         ma = self.f_ma.text().strip(); hang = self.f_hang.text().strip()
         dong = self.f_dong.text().strip(); nam = self.f_nam.text().strip()
+        skhung = self.f_skhung.text().strip(); smay = self.f_smay.text().strip()
         if not all([ma, hang, dong, nam]):
             QMessageBox.warning(self,"","Vui lòng điền đầy đủ các trường bắt buộc (*)!"); return
         conn = get_conn()
         try:
             if conn.execute("SELECT id FROM xe WHERE ma_xe=?",(ma,)).fetchone():
                 QMessageBox.warning(self,"","Mã xe đã tồn tại!"); return
+            if skhung:
+                dup = conn.execute("SELECT ma_xe FROM xe WHERE so_khung=?",(skhung,)).fetchone()
+                if dup:
+                    QMessageBox.warning(self,"",f"Số khung «{skhung}» đã tồn tại (xe {dup[0]})!"); return
+            if smay:
+                dup = conn.execute("SELECT ma_xe FROM xe WHERE so_may=?",(smay,)).fetchone()
+                if dup:
+                    QMessageBox.warning(self,"",f"Số máy «{smay}» đã tồn tại (xe {dup[0]})!"); return
             conn.execute("""INSERT INTO xe(ma_xe,hang_xe,dong_xe,nam_sx,mau_sac,gia_nhap,gia_ban,
                                            so_khung,so_may,tinh_trang,trang_thai,mo_ta)
                             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                          (ma,hang,dong,nam,self.f_mau.text(),int(self.f_gian.value()),
-                          int(self.f_gban.value()),self.f_skhung.text() or None,
-                          self.f_smay.text() or None,self.f_ttinh.currentText(),
+                          int(self.f_gban.value()),skhung or None,
+                          smay or None,self.f_ttinh.currentText(),
                           self.f_tt.currentText(),self.f_mota.toPlainText()))
             xe_id = conn.execute("SELECT id FROM xe WHERE ma_xe=?",(ma,)).fetchone()
             if xe_id:

@@ -239,15 +239,45 @@ class DonHangView(BaseView):
     def _update_status(self):
         if not self._check_sel("cập nhật"): return
         from PyQt6.QtWidgets import QInputDialog
-        status,ok=QInputDialog.getItem(self,"Cập nhật","Trạng thái:",
-            ["Chờ xử lý","Đã thanh toán","Đã giao xe","Huỷ"],0,False)
-        if ok:
-            conn=get_conn()
-            conn.execute("UPDATE don_hang SET trang_thai=? WHERE id=?",(status,self._sel_id))
-            if status=="Đã giao xe":
-                dh=conn.execute("SELECT xe_id FROM don_hang WHERE id=?",(self._sel_id,)).fetchone()
-                if dh: conn.execute("UPDATE xe SET trang_thai='Đã bán' WHERE id=?",(dh[0],))
-            conn.commit(); conn.close(); self._load()
+
+        RANK = {"Chờ xử lý": 0, "Cho xu ly": 0, "Đã thanh toán": 1, "Đã giao xe": 2}
+
+        conn = get_conn()
+        cur = conn.execute("SELECT trang_thai FROM don_hang WHERE id=?", (self._sel_id,)).fetchone()
+        cur_status = cur["trang_thai"] if cur else None
+
+        if cur_status == "Huỷ":
+            conn.close()
+            QMessageBox.warning(self, "", "Đơn đã huỷ, không thể đổi sang trạng thái khác!")
+            return
+
+        status, ok = QInputDialog.getItem(self, "Cập nhật", "Trạng thái:",
+            ["Chờ xử lý", "Đã thanh toán", "Đã giao xe", "Huỷ"], 0, False)
+        if not ok:
+            conn.close(); return
+
+        # Chỉ được Huỷ khi đơn đang "Chờ xử lý"
+        if status == "Huỷ" and cur_status not in ("Chờ xử lý", "Cho xu ly"):
+            conn.close()
+            QMessageBox.warning(self, "",
+                "Chỉ có thể huỷ đơn khi đang ở trạng thái «Chờ xử lý»!\n"
+                "Đơn này đã ở trạng thái khác, không thể huỷ trực tiếp.")
+            return
+
+        # Không cho chuyển NGƯỢC (vd: "Đã giao xe" -> "Chờ xử lý")
+        if status != "Huỷ" and RANK.get(status, 0) < RANK.get(cur_status, 0):
+            conn.close()
+            QMessageBox.warning(self, "",
+                f"Không thể chuyển ngược từ «{cur_status}» về «{status}»!")
+            return
+
+        conn.execute("UPDATE don_hang SET trang_thai=? WHERE id=?", (status, self._sel_id))
+        if status == "Đã giao xe":
+            dh = conn.execute("SELECT xe_id FROM don_hang WHERE id=?", (self._sel_id,)).fetchone()
+            if dh: conn.execute("UPDATE xe SET trang_thai='Đã bán' WHERE id=?", (dh[0],))
+        if status == "Huỷ":
+            conn.execute("UPDATE don_hang SET trang_thai_tt='Huỷ' WHERE id=?", (self._sel_id,))
+        conn.commit(); conn.close(); self._load()
 
     def _export(self):
         import openpyxl
@@ -718,6 +748,16 @@ class DonHangDialog(BaseDialog):
                 sdt = self.f_kh_sdt.text().strip()
                 if not ten or not sdt:
                     QMessageBox.warning(self,"","Nhập đủ Họ tên và Số ĐT khách hàng!"); return
+
+                dup = conn.execute(
+                    "SELECT ma_kh, ho_ten FROM khach_hang WHERE so_dt=?", (sdt,)
+                ).fetchone()
+                if dup:
+                    QMessageBox.warning(self, "",
+                        f"Số điện thoại «{sdt}» đã thuộc khách hàng {dup[0]} — {dup[1]}!\n"
+                        f"Vui lòng chọn khách hàng cũ ở tab bên cạnh thay vì tạo mới.")
+                    return
+
                 cnt_kh = conn.execute("SELECT COUNT(*) FROM khach_hang").fetchone()[0]
                 ma_kh = f"KH{cnt_kh+1:03d}"
                 while conn.execute("SELECT id FROM khach_hang WHERE ma_kh=?",(ma_kh,)).fetchone():

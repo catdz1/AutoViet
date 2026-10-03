@@ -1001,14 +1001,15 @@ class TraGopDialog(QDialog):
             lai = self.f_lai.value()
 
             moi_ky = tinh_tien_tra_gop(tong, lai, ky)
+
             self.lbl_tieng.setText(
                 f"💰 Mỗi kỳ: {moi_ky/1e6:.2f} triệu ₫  |  "
-            f"Tổng: {moi_ky*ky/1e6:.1f} triệu"
+                f"Tổng: {moi_ky*ky/1e6:.1f} triệu"
             )
             self._moi_ky = moi_ky
         except Exception:
             self._moi_ky = 0
-
+            
     def _save(self):
         kh_id = self.f_kh.currentData()
         tong = self.f_tong.value()
@@ -1020,6 +1021,19 @@ class TraGopDialog(QDialog):
         if moi_ky <= 0:
             QMessageBox.warning(self, "", "Không tính được tiền mỗi kỳ — kiểm tra lại số tiền vay / số kỳ / lãi suất!"); return
         dh_id = self.f_dh.currentData()
+
+        # Có gắn đơn hàng: tổng vay + trả trước không được vượt giá xe
+        if dh_id is not None:
+            info = self._dh_info.get(dh_id)
+            if info:
+                gia = info[1]
+                tong_nghia_vu = tong + self.f_truoc.value()
+                if tong_nghia_vu > gia + 1:
+                    QMessageBox.warning(self, "",
+                        f"Tổng tiền vay + trả trước ({tong_nghia_vu/1e9:.3f} tỷ) "
+                        f"vượt quá giá xe ({gia/1e9:.3f} tỷ)!")
+                    return
+
         conn = get_conn()
         try:
             if dh_id is not None and conn.execute(
